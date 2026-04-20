@@ -1,0 +1,778 @@
+
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+							<style>
+								body {
+									background-color: white; /* Ensure the iframe has a white background */
+								}
+
+								
+							</style>
+                        </head>
+                        <body>
+                            <!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flappy Bird Klon</title>
+  <style>
+    /* ============================================
+       BASIS-STYLING – Das Spielfeld zentrieren
+       ============================================ */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #2c3e50;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Spielfeld-Container */
+    #game-wrapper {
+      position: relative;
+      width: 480px;
+      height: 640px;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+
+    /* ============================================
+       UI-OVERLAY (Start / Game Over Screens)
+       ============================================ */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 10;
+      transition: opacity 0.3s;
+    }
+
+    #overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Titel-Text */
+    #overlay h1 {
+      color: #f1c40f;
+      font-size: 48px;
+      text-shadow: 3px 3px 0 #e67e22, 6px 6px 0 rgba(0,0,0,0.3);
+      margin-bottom: 10px;
+    }
+
+    /* Score-Anzeige im Overlay */
+    #overlay .score-display {
+      color: #fff;
+      font-size: 28px;
+      margin: 10px 0 20px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    }
+
+    /* Highscore-Anzeige im Overlay */
+    #overlay .highscore-display {
+      color: #f39c12;
+      font-size: 20px;
+      margin: 0 0 25px;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.4);
+    }
+
+    /* ============================================
+       BUTTONS – Start / Restart
+       ============================================ */
+    .btn {
+      padding: 14px 48px;
+      font-size: 22px;
+      font-weight: bold;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 6px 0 rgba(0,0,0,0.3);
+    }
+
+    .btn:active {
+      transform: translateY(3px);
+      box-shadow: 0 3px 0 rgba(0,0,0,0.3);
+    }
+
+    .btn-start {
+      background: linear-gradient(180deg, #2ecc71, #27ae60);
+      color: white;
+    }
+
+    .btn-start:hover {
+      background: linear-gradient(180deg, #3ddc81, #2ecc71);
+    }
+
+    .btn-restart {
+      background: linear-gradient(180deg, #e74c3c, #c0392b);
+      color: white;
+    }
+
+    .btn-restart:hover {
+      background: linear-gradient(180deg, #f75c4c, #e74c3c);
+    }
+
+    /* Hinweis-Text */
+    #overlay .hint {
+      color: rgba(255,255,255,0.7);
+      font-size: 16px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game-wrapper">
+    <canvas id="gameCanvas" width="480" height="640"></canvas>
+
+    <!-- UI-Overlay für Start / Game Over -->
+    <div id="overlay">
+      <h1 id="overlay-title">Flappy Bird</h1>
+      <div class="score-display" id="overlay-score" style="display:none;"></div>
+      <div class="highscore-display" id="overlay-highscore" style="display:none;"></div>
+      <button class="btn btn-start" id="startBtn">Start</button>
+      <button class="btn btn-restart" id="restartBtn" style="display:none;">Restart</button>
+      <p class="hint" id="overlay-hint">Klick oder Leertaste zum Fliegen</p>
+    </div>
+  </div>
+
+<script>
+// ================================================================
+//  FLAPPY BIRD – Single-File Browsergame
+//  ================================================================
+//
+//  ANPASSUNGEN (Schwierigkeit):
+//  ─────────────────────────────────
+//  GRAVITY          : Schwerkraft pro Frame (↑ = schneller fallend)
+//  JUMP_STRENGTH    : Sprungkraft (↑ = höher der Sprung)
+//  BIRD_X           : Horizontale Position des Vogels
+//  BIRD_SIZE        : Größe des Vogels (Radius)
+//  PIPE_WIDTH       : Breite einer Röhre
+//  PIPE_GAP         : Höhe der Lücke zwischen Röhren
+//  PIPE_SPEED       : Geschwindigkeit der Röhren (px/Frame)
+//  PIPE_INTERVAL    : frames zwischen neuen Röhren
+//  GROUND_HEIGHT    : Höhe des Bodens in px
+//  START_SCORE      : Score beim Neustart
+//  BIRD_COLOR       : Farbe des Vogels
+//  BIRD_EYE_COLOR   : Farbe des Auges
+//  BIRD_BEAK_COLOR  : Farbe des Schnabels
+//  PIPE_COLOR       : Farbe der Röhren
+//  PIPE_CAP_COLOR   : Farbe des Röhrenrandes
+//  BG_COLOR_TOP     : Farbverlauf oben (Himmel)
+//  BG_COLOR_BOTTOM  : Farbverlauf unten (Himmel)
+//  GROUND_COLOR     : Farbe des Bodens
+//  GROUND_DETAIL    : Farbe der Bodendetails (Gras)
+//  CloudColor       : Farbe der Wolken
+//  Cloud positions  : zufällig generiert
+//  ================================================================
+
+// ─────────────────────────────────────────────
+// KONFIGURATION – Hier Schwierigkeit anpassen
+// ─────────────────────────────────────────────
+const CONFIG = {
+  GRAVITY:        0.45,      // Schwerkraft (erhöhen = schwerer fallen)
+  JUMP_STRENGTH:  -7.5,      // Sprungkraft (negativ = nach oben)
+  BIRD_X:         120,       // X-Position des Vogels
+  BIRD_SIZE:      18,        // Radius des Vogels
+  BIRD_COLOR:     '#f1c40f', // Körperfarbe des Vogels
+  BIRD_EYE_COLOR: '#fff',    // Augenfarbe
+  BIRD_PUPIL_COLOR: '#2c3e50', // Pupillenfarbe
+  BIRD_BEAK_COLOR:  '#e67e22',  // Schnabelfarbe
+  BIRD_WING_COLOR:  '#e67e22',  // Flügelfarbe
+
+  PIPE_WIDTH:       62,      // Breite einer Röhre
+  PIPE_GAP:         150,     // Höhe der Lücke (↑ = einfacher)
+  PIPE_SPEED:       2.5,     // Pixel pro Frame
+  PIPE_INTERVAL:    90,      // Frames zwischen Röhren (↑ = weniger Röhren)
+  PIPE_COLOR:       '#27ae60', // Hauptfarbe der Röhre
+  PIPE_CAP_COLOR:   '#2ecc71', // Farbe des Röhrenrandes
+  PIPE_CAP_EXTRA:   8,       // Wie viel der Rand übersteht (px)
+
+  GROUND_HEIGHT:    80,      // Höhe des Bodens in px
+  GROUND_COLOR:     '#d4a543', // Braun/Gelb
+  GROUND_DETAIL:    '#27ae60', // Grasfarbe oben auf dem Boden
+
+  BG_TOP:   '#4ec0ca',       // Himmel oben (Helliger)
+  BG_BOTTOM:'#87CEEB',       // Himmel unten (Dunkler)
+
+  CLOUD_COLOR: 'rgba(255,255,255,0.6)', // Wolkenfarbe
+
+  START_SCORE: 0,
+  HIGHSCORE_KEY: 'flappy_highscore',
+};
+
+// ─────────────────────────────────────────────
+// CANVAS & CONTEXT SETUP
+// ─────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+const W      = canvas.width;   // 480
+const H      = canvas.height;  // 640
+
+// ─────────────────────────────────────────────
+// UI-Elemente
+// ─────────────────────────────────────────────
+const overlay     = document.getElementById('overlay');
+const overlayTitle   = document.getElementById('overlay-title');
+const overlayScore   = document.getElementById('overlay-score');
+const overlayHighscore = document.getElementById('overlay-highscore');
+const startBtn     = document.getElementById('startBtn');
+const restartBtn   = document.getElementById('restartBtn');
+const overlayHint  = document.getElementById('overlay-hint');
+
+// ─────────────────────────────────────────────
+// SPIELZUSTAND
+// ─────────────────────────────────────────────
+let bird, pipes, score, highscore, gameState, frameCount, clouds;
+
+/*
+  gameState:
+    'idle'   – Wartet auf Start
+    'playing' – Spiel läuft
+    'dead'   – Game Over
+*/
+
+// ─────────────────────────────────────────────
+// INITIALISIERUNG
+// ─────────────────────────────────────────────
+function init() {
+  highscore = parseInt(localStorage.getItem(CONFIG.HIGHSCORE_KEY)) || 0;
+
+  bird = {
+    x: CONFIG.BIRD_X,
+    y: H / 2 - 50,
+    vy: 0,              // vertikale Geschwindigkeit
+    rotation: 0,        // Rotation des Vogels (Grad)
+    wingAngle: 0,       // für FlügelanIMATION
+  };
+
+  pipes   = [];
+  score   = CONFIG.START_SCORE;
+  gameState = 'idle';
+  frameCount = 0;
+
+  // Wolken initialisieren
+  clouds = [];
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      x: Math.random() * W,
+      y: 30 + Math.random() * 150,
+      w: 60 + Math.random() * 80,
+      speed: 0.2 + Math.random() * 0.3,
+    });
+  }
+
+  renderIdle();
+}
+
+// ─────────────────────────────────────────────
+// SPIEL STARTEN
+// ─────────────────────────────────────────────
+function startGame() {
+  gameState = 'playing';
+  overlay.classList.add('hidden');
+  overlayHint.style.display = 'none';
+  startBtn.style.display = 'none';
+  restartBtn.style.display = 'none';
+  overlayScore.style.display = 'none';
+  overlayHighscore.style.display = 'none';
+  overlayTitle.style.display = 'none';
+  gameLoop();
+}
+
+// ─────────────────────────────────────────────
+// GAME OVER
+// ─────────────────────────────────────────────
+function gameOver() {
+  gameState = 'dead';
+
+  // Highscore speichern
+  if (score > highscore) {
+    highscore = score;
+    localStorage.setItem(CONFIG.HIGHSCORE_KEY, highscore);
+  }
+
+  // Overlay anzeigen
+  overlayTitle.textContent = '💀 Game Over';
+  overlayTitle.style.display = 'block';
+  overlayScore.textContent = `Score: ${score}`;
+  overlayScore.style.display = 'block';
+  overlayHighscore.textContent = `Highscore: ${highscore}`;
+  overlayHighscore.style.display = 'block';
+  startBtn.style.display = 'none';
+  restartBtn.style.display = 'inline-block';
+  restartBtn.textContent = 'Restart';
+  overlayHint.textContent = 'Klick oder Leertaste zum Neustart';
+  overlayHint.style.display = 'block';
+  overlay.classList.remove('hidden');
+}
+
+// ─────────────────────────────────────────────
+// SPRUNG-aktion
+// ─────────────────────────────────────────────
+function jump() {
+  if (gameState === 'playing') {
+    bird.vy = CONFIG.JUMP_STRENGTH;
+    // Flügelschlag-Animation zurücksetzen
+    bird.wingAngle = -20;
+  } else if (gameState === 'dead') {
+    // Im Game-Over-Status: Neustart bei Klick/Leertaste
+    init();
+    startGame();
+  }
+}
+
+// ─────────────────────────────────────────────
+// RÖHRE ERSTELLEN
+// ─────────────────────────────────────────────
+function createPipe() {
+  const minTop = 60;
+  const maxTop = H - CONFIG.GROUND_HEIGHT - CONFIG.PIPE_GAP - 60;
+  const topHeight = minTop + Math.random() * (maxTop - minTop);
+
+  pipes.push({
+    x: W + 10,                    // Start außerhalb rechts
+    topHeight: topHeight,          // Höhe der oberen Röhre
+    bottomY: topHeight + CONFIG.PIPE_GAP, // Y-Position der unteren Röhre
+    scored: false,                 // Wurde schon punkt-gutz?
+  });
+}
+
+// ─────────────────────────────────────────────
+// KOLLISION ERKENNEN
+// ─────────────────────────────────────────────
+function checkCollision() {
+  const groundY = H - CONFIG.GROUND_HEIGHT;
+  const r = CONFIG.BIRD_SIZE - 2; // Etwas kleiner für forgiving collision
+
+  // Bodenkollision (oder Decke)
+  if (bird.y + r > groundY || bird.y - r < 0) {
+    return true;
+  }
+
+  // Röhren-Kollision (AABB vs. Kreis-Achsen-Test)
+  for (const pipe of pipes) {
+    // X-Bereich der Röhre prüfen
+    const left  = pipe.x;
+    const right = pipe.x + CONFIG.PIPE_WIDTH;
+
+    // Wenn Vogel im X-Bereich der Röhre ist
+    if (bird.x + r > left && bird.x - r < right) {
+      // Obere Röhre berührt?
+      if (bird.y - r < pipe.topHeight) return true;
+      // Untere Röhre berührt?
+      if (bird.y + r > pipe.bottomY) return true;
+    }
+  }
+
+  return false;
+}
+
+// ─────────────────────────────────────────────
+// HILFSFUNKTION: Wolken zeichnen
+// ─────────────────────────────────────────────
+function drawCloud(cloud) {
+  ctx.fillStyle = CONFIG.CLOUD_COLOR;
+  ctx.beginPath();
+  ctx.ellipse(cloud.x, cloud.y, cloud.w / 2, cloud.w / 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cloud.x - cloud.w / 5, cloud.y + 5, cloud.w / 3, cloud.w / 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cloud.x + cloud.w / 5, cloud.y + 3, cloud.w / 3.5, cloud.w / 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ─────────────────────────────────────────────
+// VOGEL ZEICHNEN
+// ─────────────────────────────────────────────
+function drawBird(b) {
+  ctx.save();
+  ctx.translate(b.x, b.y);
+
+  // Rotation basierend auf vertikaler Geschwindigkeit
+  const targetRot = Math.min(Math.max(b.vy * 3, -30), 90);
+  b.rotation += (targetRot - b.rotation) * 0.15;
+  ctx.rotate(b.rotation * Math.PI / 180);
+
+  // ── Körper ──
+  const r = CONFIG.BIRD_SIZE;
+
+  // Schatten / Gradient-Effekt
+  const bodyGrad = ctx.createRadialGradient(-3, -3, 2, 0, 0, r);
+  bodyGrad.addColorStop(0, '#ffe066');
+  bodyGrad.addColorStop(1, CONFIG.BIRD_COLOR);
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Umriss
+  ctx.strokeStyle = '#c79a13';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // ── Auge ──
+  ctx.fillStyle = CONFIG.BIRD_EYE_COLOR;
+  ctx.beginPath();
+  ctx.arc(7, -5, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Pupille
+  ctx.fillStyle = CONFIG.BIRD_PUPIL_COLOR;
+  ctx.beginPath();
+  ctx.arc(9, -5, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── Schnabel ──
+  ctx.fillStyle = CONFIG.BIRD_BEAK_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(12, 0);
+  ctx.lineTo(24, 3);
+  ctx.lineTo(12, 7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#ca6f1e';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // ── Flügel (animiert) ──
+  ctx.save();
+  ctx.translate(-4, 2);
+  // Flügel-Animation: schnelles Aufwärts, langsames Absinken
+  b.wingAngle += (0 - b.wingAngle) * 0.08; // zum Normal zurück
+  ctx.rotate(b.wingAngle * Math.PI / 180);
+
+  ctx.fillStyle = CONFIG.BIRD_WING_COLOR;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 12, 7, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#c77a1a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// RÖHREN ZEICHNEN
+// ─────────────────────────────────────────────
+function drawPipe(pipe) {
+  const capExtra = CONFIG.PIPE_CAP_EXTRA;
+
+  // ── Obere Röhre ──
+  const topGrad = ctx.createLinearGradient(pipe.x, 0, pipe.x + CONFIG.PIPE_WIDTH, 0);
+  topGrad.addColorStop(0, '#1e8449');
+  topGrad.addColorStop(0.3, CONFIG.PIPE_COLOR);
+  topGrad.addColorStop(0.7, '#2ecc71');
+  topGrad.addColorStop(1, '#1a7a3e');
+
+  ctx.fillStyle = topGrad;
+  ctx.fillRect(pipe.x, 0, CONFIG.PIPE_WIDTH, pipe.topHeight);
+
+  // Oberer Röhrenrand (Cap)
+  ctx.fillStyle = topGrad;
+  ctx.fillRect(
+    pipe.x - capExtra, pipe.topHeight - capExtra * 2,
+    CONFIG.PIPE_WIDTH + capExtra * 2, capExtra * 2
+  );
+  ctx.strokeStyle = '#1a7a3e';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(pipe.x, 0, CONFIG.PIPE_WIDTH, pipe.topHeight);
+  ctx.strokeRect(pipe.x - capExtra, pipe.topHeight - capExtra * 2, CONFIG.PIPE_WIDTH + capExtra * 2, capExtra * 2);
+
+  // Highlight-Kante (links)
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(pipe.x + 4, 0, 6, pipe.topHeight - capExtra * 2);
+
+  // ── Untere Röhre ──
+  const bottomGrad = ctx.createLinearGradient(pipe.x, 0, pipe.x + CONFIG.PIPE_WIDTH, 0);
+  bottomGrad.addColorStop(0, '#1e8449');
+  bottomGrad.addColorStop(0.3, CONFIG.PIPE_COLOR);
+  bottomGrad.addColorStop(0.7, '#2ecc71');
+  bottomGrad.addColorStop(1, '#1a7a3e');
+
+  ctx.fillStyle = bottomGrad;
+  ctx.fillRect(
+    pipe.x, pipe.bottomY,
+    CONFIG.PIPE_WIDTH, H - CONFIG.GROUND_HEIGHT - pipe.bottomY
+  );
+
+  // Unterer Röhrenrand (Cap)
+  ctx.fillStyle = bottomGrad;
+  ctx.fillRect(
+    pipe.x - capExtra, pipe.bottomY,
+    CONFIG.PIPE_WIDTH + capExtra * 2, capExtra * 2
+  );
+  ctx.strokeStyle = '#1a7a3e';
+  ctx.strokeRect(pipe.x, pipe.bottomY, CONFIG.PIPE_WIDTH, H - CONFIG.GROUND_HEIGHT - pipe.bottomY);
+  ctx.strokeRect(pipe.x - capExtra, pipe.bottomY, CONFIG.PIPE_WIDTH + capExtra * 2, capExtra * 2);
+
+  // Highlight-Kante (links)
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(pipe.x + 4, pipe.bottomY + capExtra * 2, 6, H - CONFIG.GROUND_HEIGHT - pipe.bottomY - capExtra * 2);
+}
+
+// ─────────────────────────────────────────────
+// BODEN ZEICHNEN
+// ─────────────────────────────────────────────
+function drawGround(offset) {
+  const groundY = H - CONFIG.GROUND_HEIGHT;
+
+  // Gras-Streifen
+  ctx.fillStyle = CONFIG.GROUND_DETAIL;
+  ctx.fillRect(0, groundY, W, 12);
+
+  // Braun/Gelb darunter
+  const groundGrad = ctx.createLinearGradient(0, groundY + 12, 0, H);
+  groundGrad.addColorStop(0, '#d4a543');
+  groundGrad.addColorStop(1, '#c08830');
+  ctx.fillStyle = groundGrad;
+  ctx.fillRect(0, groundY + 12, W, CONFIG.GROUND_HEIGHT);
+
+  // Gras-Muster (Zacke)
+  ctx.fillStyle = '#2ecc71';
+  const toothW = 16;
+  const count = Math.ceil(W / toothW) + 2;
+  const startX = -(offset % toothW);
+  for (let i = -1; i < count; i++) {
+    const tx = startX + i * toothW;
+    ctx.beginPath();
+    ctx.moveTo(tx, groundY);
+    ctx.lineTo(tx + toothW / 2, groundY - 8);
+    ctx.lineTo(tx + toothW, groundY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Trennlinie
+  ctx.strokeStyle = '#1e8449';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, groundY);
+  ctx.lineTo(W, groundY);
+  ctx.stroke();
+}
+
+// ─────────────────────────────────────────────
+// SCORE AUF DEM CANVAS ZEICHNEN
+// ─────────────────────────────────────────────
+function drawScore(s) {
+  ctx.save();
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 52px "Segoe UI", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+
+  // Text-Schatten für bessere Lesbarkeit
+  ctx.strokeText(s, W / 2, 40);
+  ctx.fillText(s, W / 2, 40);
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// INITIALER (inaktiver) HINTERGRUND
+// ─────────────────────────────────────────────
+function renderIdle() {
+  // Himmel
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H - CONFIG.GROUND_HEIGHT);
+  skyGrad.addColorStop(0, CONFIG.BG_TOP);
+  skyGrad.addColorStop(1, CONFIG.BG_BOTTOM);
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Wolken
+  clouds.forEach(drawCloud);
+
+  // Boden
+  drawGround(0);
+
+  // Vogel schwebt mittig
+  const idleBird = {
+    x: W / 2,
+    y: H / 2 - 40 + Math.sin(Date.now() / 400) * 15,
+    vy: 0,
+    rotation: 0,
+    wingAngle: 0,
+  };
+  drawBird(idleBird);
+}
+
+// ─────────────────────────────────────────────
+// HAUPTSCHLEIFE (Game Loop)
+// ─────────────────────────────────────────────
+let animFrameId = null;
+
+function gameLoop() {
+  if (gameState !== 'playing') return;
+
+  frameCount++;
+
+  // ── Wolken bewegen ──
+  clouds.forEach(c => {
+    c.x -= c.speed;
+    if (c.x + c.w / 2 < 0) {
+      c.x = W + c.w / 2;
+      c.y = 30 + Math.random() * 150;
+    }
+  });
+
+  // ── Vogel-Physik ──
+  bird.vy += CONFIG.GRAVITY;
+  bird.y += bird.vy;
+
+  // ── Röhren spawnen ──
+  if (frameCount % CONFIG.PIPE_INTERVAL === 0) {
+    createPipe();
+  }
+
+  // ── Röhren bewegen ──
+  for (let i = pipes.length - 1; i >= 0; i--) {
+    pipes[i].x -= CONFIG.PIPE_SPEED;
+
+    // Punkt-Zählung: wenn Vogel die Röhre passiert hat
+    if (!pipes[i].scored && pipes[i].x + CONFIG.PIPE_WIDTH < bird.x) {
+      pipes[i].scored = true;
+      score++;
+    }
+
+    // Röhren entfernen die aus dem Bild sind
+    if (pipes[i].x + CONFIG.PIPE_WIDTH < -10) {
+      pipes.splice(i, 1);
+    }
+  }
+
+  // ── Kollision prüfen ──
+  if (checkCollision()) {
+    gameOver();
+    drawFrame(); // Letzten Frame noch rendern
+    return; // Schleife beenden
+  }
+
+  // ── Frame rendern ──
+  drawFrame();
+
+  // Nächster Frame
+  animFrameId = requestAnimationFrame(gameLoop);
+}
+
+// ─────────────────────────────────────────────
+// EINGESAMTEN FRAME RENDERN
+// ─────────────────────────────────────────────
+function drawFrame() {
+  // ── Himmel ──
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H - CONFIG.GROUND_HEIGHT);
+  skyGrad.addColorStop(0, CONFIG.BG_TOP);
+  skyGrad.addColorStop(1, CONFIG.BG_BOTTOM);
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Wolken ──
+  clouds.forEach(drawCloud);
+
+  // ── Röhren ──
+  pipes.forEach(drawPipe);
+
+  // ── Boden ──
+  const groundOffset = pipes.length > 0 ? pipes[0].x : 0;
+  drawGround(frameCount * CONFIG.PIPE_SPEED * 0.5); // Boden scrollt mit
+
+  // ── Vogel ──
+  drawBird(bird);
+
+  // ── Score ──
+  drawScore(score);
+
+  // ── Game-Over-Overlay (im Canvas selbst, falls gewünscht) ──
+  // (Wird aber durch das HTML-Overlay gelöst)
+}
+
+// ─────────────────────────────────────────────
+// EVENT-LISTENER
+// ─────────────────────────────────────────────
+
+// Mausklick auf Canvas
+canvas.addEventListener('click', (e) => {
+  e.preventDefault();
+  if (gameState === 'playing') {
+    jump();
+  }
+});
+
+// Leertaste
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.key === ' ') {
+    e.preventDefault();
+    if (gameState === 'playing') {
+      jump();
+    } else if (gameState === 'dead') {
+      init();
+      startGame();
+    }
+  }
+});
+
+// Start-Button
+startBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  startGame();
+});
+
+// Restart-Button
+restartBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  init();
+  startGame();
+});
+
+// ─────────────────────────────────────────────
+// SPIEL INITIALISIEREN
+// ─────────────────────────────────────────────
+init();
+
+</script>
+</body>
+</html>
+
+							<script>
+                            	
+							</script>
+                        </body>
+                        </html>
+                    

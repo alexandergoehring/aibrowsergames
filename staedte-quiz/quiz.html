@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deutsche Städte Quiz</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(135deg, #0d0d0d 0%, #1a1a2e 50%, #16213e 100%);
+    color: #f0f0f0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .container {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ── START ── */
+  .start-screen { text-align: center; animation: fadeIn 0.8s ease; }
+
+  .start-screen h1 {
+    font-size: 2.8rem; font-weight: 800;
+    background: linear-gradient(135deg, #ffd700, #ff6b35);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .start-screen .subtitle { font-size: 1.1rem; color: #aaa; margin-bottom: 40px; }
+  .start-screen .flag { font-size: 4rem; margin-bottom: 20px; }
+
+  .info-box {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px; padding: 24px 32px;
+    margin-bottom: 36px; text-align: left; line-height: 1.7; color: #ccc;
+  }
+  .info-box strong { color: #ffd700; }
+
+  .btn {
+    display: inline-block; padding: 16px 48px; font-size: 1.1rem;
+    font-weight: 700; border: none; border-radius: 50px; cursor: pointer;
+    transition: all 0.3s ease; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .btn-primary { background: linear-gradient(135deg, #ffd700, #ff6b35); color: #1a1a2e; }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(255,215,0,0.3); }
+
+  /* ── SETUP (missing images) ── */
+  .setup-screen { text-align: center; animation: fadeIn 0.6s ease; max-width: 600px; }
+  .setup-screen h2 { font-size: 1.6rem; margin-bottom: 16px; color: #ff6b35; }
+  .setup-screen p { color: #aaa; line-height: 1.7; margin-bottom: 12px; }
+  .setup-screen code {
+    display: block; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px; padding: 14px 20px; font-size: 0.95rem; color: #ffd700;
+    margin: 16px 0; text-align: left; word-break: break-all;
+  }
+  .image-status { text-align: left; margin: 20px 0; }
+  .image-status div { padding: 4px 0; font-size: 0.9rem; }
+  .image-status .found { color: #4caf50; }
+  .image-status .missing { color: #f44336; }
+  .retry-btn {
+    margin-top: 20px; padding: 12px 36px; font-size: 0.95rem;
+    font-weight: 600; font-family: 'Inter', sans-serif;
+    border: 2px solid #ffd700; border-radius: 50px;
+    background: transparent; color: #ffd700; cursor: pointer;
+    transition: all 0.3s ease;
+  }
+  .retry-btn:hover { background: rgba(255,215,0,0.1); }
+
+  /* ── QUIZ ── */
+  .quiz-screen { width: 100%; animation: fadeIn 0.5s ease; }
+
+  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .progress-info { font-size: 0.9rem; color: #aaa; }
+  .progress-info span { color: #ffd700; font-weight: 700; }
+
+  .score-display {
+    background: rgba(255,215,0,0.1); border: 1px solid rgba(255,215,0,0.3);
+    padding: 8px 20px; border-radius: 50px; font-weight: 700; color: #ffd700;
+  }
+
+  .progress-bar-container {
+    width: 100%; height: 6px; background: rgba(255,255,255,0.1);
+    border-radius: 3px; margin-bottom: 24px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; background: linear-gradient(90deg, #ffd700, #ff6b35);
+    border-radius: 3px; transition: width 0.5s ease;
+  }
+
+  .question-text {
+    text-align: center; font-size: 1.3rem; font-weight: 600;
+    margin-bottom: 20px; color: #eee;
+  }
+
+  .image-container {
+    width: 100%; height: 420px; border-radius: 16px; overflow: hidden;
+    margin-bottom: 24px; position: relative;
+    background: #111; border: 1px solid rgba(255,255,255,0.1);
+  }
+  .image-container img {
+    width: 100%; height: 100%; object-fit: cover;
+    transition: opacity 0.5s ease;
+  }
+  .image-container .loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #555; font-size: 0.95rem;
+  }
+
+  .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+
+  .option-btn {
+    padding: 16px 20px; font-size: 1rem; font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    border: 2px solid rgba(255,255,255,0.15); border-radius: 12px;
+    background: rgba(255,255,255,0.05); color: #f0f0f0;
+    cursor: pointer; transition: all 0.25s ease; text-align: center;
+  }
+  .option-btn:hover:not(.disabled) {
+    border-color: #ffd700; background: rgba(255,215,0,0.08); transform: translateY(-1px);
+  }
+  .option-btn.correct { border-color: #4caf50; background: rgba(76,175,80,0.2); color: #4caf50; }
+  .option-btn.wrong { border-color: #f44336; background: rgba(244,67,54,0.2); color: #f44336; }
+  .option-btn.disabled { cursor: default; opacity: 0.6; }
+  .option-btn.disabled.correct { opacity: 1; }
+
+  .feedback-bar {
+    text-align: center; padding: 14px; border-radius: 12px;
+    font-weight: 600; font-size: 1rem; margin-bottom: 16px; animation: fadeIn 0.3s ease;
+  }
+  .feedback-bar.correct-feedback { background: rgba(76,175,80,0.15); border: 1px solid rgba(76,175,80,0.3); color: #4caf50; }
+  .feedback-bar.wrong-feedback { background: rgba(244,67,54,0.15); border: 1px solid rgba(244,67,54,0.3); color: #f44336; }
+
+  .next-btn-container { text-align: center; }
+  .btn-next {
+    padding: 12px 40px; font-size: 1rem; font-weight: 700;
+    font-family: 'Inter', sans-serif;
+    border: 2px solid #ffd700; border-radius: 50px;
+    background: transparent; color: #ffd700; cursor: pointer; transition: all 0.3s ease;
+  }
+  .btn-next:hover { background: rgba(255,215,0,0.1); transform: translateY(-1px); }
+
+  /* ── RESULTS ── */
+  .result-screen { text-align: center; animation: fadeIn 0.8s ease; width: 100%; }
+  .result-screen .trophy { font-size: 5rem; margin-bottom: 16px; }
+  .result-screen h2 { font-size: 2.2rem; font-weight: 800; margin-bottom: 8px; }
+  .result-screen .result-subtitle { color: #aaa; font-size: 1.1rem; margin-bottom: 32px; }
+
+  .score-circle {
+    width: 160px; height: 160px; border-radius: 50%; border: 6px solid #ffd700;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    margin: 0 auto 32px; background: rgba(255,215,0,0.05);
+  }
+  .score-circle .big-num { font-size: 3rem; font-weight: 800; color: #ffd700; line-height: 1; }
+  .score-circle .of-ten { font-size: 1rem; color: #aaa; }
+  .result-message { font-size: 1.1rem; color: #ccc; margin-bottom: 32px; line-height: 1.6; }
+
+  .result-summary { display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; margin-bottom: 36px; }
+  .result-dot {
+    width: 100%; aspect-ratio: 1; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; font-weight: 700;
+  }
+  .result-dot.dot-correct { background: rgba(76,175,80,0.15); border: 1px solid rgba(76,175,80,0.3); color: #4caf50; }
+  .result-dot.dot-wrong { background: rgba(244,67,54,0.15); border: 1px solid rgba(244,67,54,0.3); color: #f44336; }
+  .result-dot .dot-city { font-size: 0.6rem; margin-top: 2px; color: #aaa; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 600px) {
+    .start-screen h1 { font-size: 2rem; }
+    .image-container { height: 260px; }
+    .options-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+
+  <!-- START -->
+  <div class="start-screen" id="startScreen">
+    <div class="flag">🇩🇪</div>
+    <h1>Städte-Quiz</h1>
+    <p class="subtitle">Erkennst du die deutschen Großstädte anhand ihrer Sehenswürdigkeiten?</p>
+    <div class="info-box">
+      <strong>So geht's:</strong> Dir werden echte Fotos bekannter Sehenswürdigkeiten gezeigt.
+      Wähle die richtige Stadt aus vier Möglichkeiten. Insgesamt warten
+      <strong>10 Fragen</strong> auf dich. Wie viele Städte erkennst du?
+    </div>
+    <button class="btn btn-primary" onclick="checkImagesAndStart()">Quiz starten</button>
+  </div>
+
+  <!-- SETUP (wenn Bilder fehlen) -->
+  <div class="setup-screen" id="setupScreen" style="display:none;"></div>
+
+  <!-- QUIZ -->
+  <div class="quiz-screen" id="quizScreen" style="display:none;">
+    <div class="top-bar">
+      <div class="progress-info">Frage <span id="currentQ">1</span> von 10</div>
+      <div class="score-display" id="scoreDisplay">0</div>
+    </div>
+    <div class="progress-bar-container">
+      <div class="progress-bar" id="progressBar" style="width:10%"></div>
+    </div>
+    <div class="question-text">Welche Stadt zeigt dieses Foto?</div>
+    <div class="image-container" id="imageContainer">
+      <span class="loading" id="loadingText">Bild wird geladen…</span>
+      <img id="quizImage" src="" alt="Sehenswürdigkeit" style="opacity:0"
+           onload="this.style.opacity=1; document.getElementById('loadingText').style.display='none';"
+           onerror="this.style.display='none'; document.getElementById('loadingText').textContent='Bild konnte nicht geladen werden';">
+    </div>
+    <div class="options-grid" id="optionsGrid"></div>
+    <div id="feedbackArea"></div>
+    <div class="next-btn-container" id="nextBtnContainer" style="display:none;">
+      <button class="btn-next" onclick="nextQuestion()">Nächste Frage &rarr;</button>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="result-screen" id="resultScreen" style="display:none;"></div>
+
+</div>
+
+<script>
+const quizData = [
+  {
+    city: "Berlin",
+    landmark: "Brandenburger Tor",
+    image: "images/berlin.jpg",
+    options: ["Berlin", "München", "Hamburg", "Dresden"]
+  },
+  {
+    city: "München",
+    landmark: "Frauenkirche",
+    image: "images/muenchen.jpg",
+    options: ["Stuttgart", "München", "Nürnberg", "Augsburg"]
+  },
+  {
+    city: "Hamburg",
+    landmark: "Elbphilharmonie",
+    image: "images/hamburg.jpg",
+    options: ["Bremen", "Kiel", "Hamburg", "Rostock"]
+  },
+  {
+    city: "Köln",
+    landmark: "Kölner Dom",
+    image: "images/koeln.jpg",
+    options: ["Köln", "Bonn", "Düsseldorf", "Aachen"]
+  },
+  {
+    city: "Frankfurt",
+    landmark: "Skyline am Main",
+    image: "images/frankfurt.jpg",
+    options: ["Mannheim", "Frankfurt", "Wiesbaden", "Darmstadt"]
+  },
+  {
+    city: "Dresden",
+    landmark: "Frauenkirche Dresden",
+    image: "images/dresden.jpg",
+    options: ["Leipzig", "Erfurt", "Dresden", "Chemnitz"]
+  },
+  {
+    city: "Heidelberg",
+    landmark: "Schloss & Alte Brücke",
+    image: "images/heidelberg.jpg",
+    options: ["Freiburg", "Tübingen", "Heidelberg", "Würzburg"]
+  },
+  {
+    city: "Düsseldorf",
+    landmark: "Rheinturm",
+    image: "images/duesseldorf.jpg",
+    options: ["Düsseldorf", "Köln", "Essen", "Dortmund"]
+  },
+  {
+    city: "Nürnberg",
+    landmark: "Kaiserburg",
+    image: "images/nuernberg.jpg",
+    options: ["Regensburg", "Bamberg", "Nürnberg", "Würzburg"]
+  },
+  {
+    city: "Leipzig",
+    landmark: "Völkerschlachtdenkmal",
+    image: "images/leipzig.jpg",
+    options: ["Halle", "Leipzig", "Magdeburg", "Potsdam"]
+  }
+];
+
+let currentQuestion = 0;
+let score = 0;
+let results = [];
+let shuffledData = [];
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ── Image check ──
+function checkImage(src) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+}
+
+async function checkImagesAndStart() {
+  const checks = await Promise.all(quizData.map(q => checkImage(q.image)));
+  const allOk = checks.every(Boolean);
+
+  if (allOk) {
+    startQuiz();
+  } else {
+    showSetup(checks);
+  }
+}
+
+function showSetup(checks) {
+  document.getElementById('startScreen').style.display = 'none';
+  const el = document.getElementById('setupScreen');
+  el.style.display = 'block';
+
+  let statusHtml = '';
+  quizData.forEach((q, i) => {
+    const ok = checks[i];
+    const cls = ok ? 'found' : 'missing';
+    const icon = ok ? '✓' : '✗';
+    statusHtml += '<div class="' + cls + '">' + icon + '  ' + q.city + ' — ' + q.image + '</div>';
+  });
+
+  el.innerHTML =
+    '<h2>Bilder fehlen!</h2>' +
+    '<p>Das Quiz benötigt Fotos im Unterordner <strong>images/</strong>. ' +
+    'Führe zuerst das Download-Skript aus:</p>' +
+    '<code>python3 bilder_herunterladen.py</code>' +
+    '<div class="info-box">' +
+    '<strong>Status der Bilder:</strong>' +
+    '<div class="image-status">' + statusHtml + '</div>' +
+    '</div>' +
+    '<p style="color:#888;font-size:0.85rem;">Nach dem Download lade diese Seite einfach neu.</p>' +
+    '<button class="retry-btn" onclick="location.reload()">Erneut prüfen</button>';
+}
+
+// ── Quiz logic ──
+function startQuiz() {
+  currentQuestion = 0;
+  score = 0;
+  results = [];
+  shuffledData = shuffle(quizData);
+  document.getElementById('startScreen').style.display = 'none';
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('quizScreen').style.display = 'block';
+  document.getElementById('resultScreen').style.display = 'none';
+  showQuestion();
+}
+
+function showQuestion() {
+  const q = shuffledData[currentQuestion];
+  document.getElementById('currentQ').textContent = currentQuestion + 1;
+  document.getElementById('scoreDisplay').textContent = score;
+  document.getElementById('progressBar').style.width = ((currentQuestion + 1) / 10 * 100) + '%';
+
+  const img = document.getElementById('quizImage');
+  img.style.opacity = 0;
+  img.style.display = 'block';
+  document.getElementById('loadingText').style.display = 'block';
+  document.getElementById('loadingText').textContent = 'Bild wird geladen…';
+  img.src = q.image;
+
+  const grid = document.getElementById('optionsGrid');
+  grid.innerHTML = '';
+  shuffle(q.options).forEach(opt => {
+    const btn = document.createElement('button');
+    btn.className = 'option-btn';
+    btn.textContent = opt;
+    btn.onclick = () => selectAnswer(btn, opt, q.city);
+    grid.appendChild(btn);
+  });
+
+  document.getElementById('feedbackArea').innerHTML = '';
+  document.getElementById('nextBtnContainer').style.display = 'none';
+}
+
+function selectAnswer(btn, selected, correct) {
+  document.querySelectorAll('.option-btn').forEach(b => {
+    b.classList.add('disabled');
+    b.onclick = null;
+    if (b.textContent === correct) b.classList.add('correct');
+  });
+
+  const isCorrect = selected === correct;
+  if (isCorrect) {
+    score++;
+    document.getElementById('scoreDisplay').textContent = score;
+    document.getElementById('feedbackArea').innerHTML =
+      '<div class="feedback-bar correct-feedback">Richtig! Das ist ' + correct + '!</div>';
+  } else {
+    btn.classList.add('wrong');
+    document.getElementById('feedbackArea').innerHTML =
+      '<div class="feedback-bar wrong-feedback">Falsch! Die richtige Antwort war ' + correct + '.</div>';
+  }
+
+  results.push({ city: correct, correct: isCorrect });
+  document.getElementById('nextBtnContainer').style.display = 'block';
+}
+
+function nextQuestion() {
+  currentQuestion++;
+  if (currentQuestion < 10) showQuestion();
+  else showResults();
+}
+
+function showResults() {
+  document.getElementById('quizScreen').style.display = 'none';
+  const screen = document.getElementById('resultScreen');
+  screen.style.display = 'block';
+
+  let trophy, title, message;
+  if (score === 10) { trophy = '🏆'; title = 'Perfekt!'; message = 'Unglaublich — du kennst alle Städte! Ein wahrer Deutschland-Experte.'; }
+  else if (score >= 8) { trophy = '🥇'; title = 'Ausgezeichnet!'; message = 'Fast perfekt! Du kennst dich sehr gut mit deutschen Städten aus.'; }
+  else if (score >= 6) { trophy = '🥈'; title = 'Gut gemacht!'; message = 'Solides Ergebnis! Ein paar Städte waren wohl etwas kniffliger.'; }
+  else if (score >= 4) { trophy = '🥉'; title = 'Nicht schlecht!'; message = 'Da geht noch was — beim nächsten Versuch schaffst du bestimmt mehr!'; }
+  else { trophy = '🗺️'; title = 'Übung macht den Meister!'; message = 'Zeit für eine Deutschlandreise? Beim nächsten Mal klappt es besser!'; }
+
+  let dots = '';
+  results.forEach(r => {
+    const cls = r.correct ? 'dot-correct' : 'dot-wrong';
+    const sym = r.correct ? '✓' : '✗';
+    dots += '<div class="result-dot ' + cls + '"><div>' + sym + '<div class="dot-city">' + r.city + '</div></div></div>';
+  });
+
+  screen.innerHTML =
+    '<div class="trophy">' + trophy + '</div><h2>' + title + '</h2>' +
+    '<p class="result-subtitle">Dein Ergebnis</p>' +
+    '<div class="score-circle"><div class="big-num">' + score + '</div><div class="of-ten">von 10</div></div>' +
+    '<p class="result-message">' + message + '</p>' +
+    '<div class="result-summary">' + dots + '</div>' +
+    '<button class="btn btn-primary" onclick="startQuiz()">Nochmal spielen</button>';
+}
+</script>
+</body>
+</html>

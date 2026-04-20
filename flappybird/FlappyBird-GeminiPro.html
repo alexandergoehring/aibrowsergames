@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Bird Klon</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        canvas {
+            display: block;
+            background-color: #70c5ce; /* Himmelblau */
+            border-radius: 8px;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Klicks an das Canvas durchreichen */
+        }
+
+        #score-display {
+            position: absolute;
+            top: 20px;
+            font-size: 48px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000;
+            z-index: 10;
+        }
+
+        .menu {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+            pointer-events: auto; /* Klicks hier erlauben */
+            display: none;
+        }
+
+        .menu h1 {
+            margin-top: 0;
+            font-size: 32px;
+        }
+
+        button {
+            background-color: #e4ad23;
+            border: 3px solid #fff;
+            color: white;
+            padding: 15px 30px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: transform 0.1s;
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        #start-menu {
+            display: block; /* Zu Beginn sichtbar */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="score-display">0</div>
+        
+        <div class="ui-layer">
+            <div id="start-menu" class="menu">
+                <h1>Flappy Block</h1>
+                <p>Klicke oder drücke Leertaste zum Springen</p>
+                <button id="start-btn">Start</button>
+            </div>
+
+            <div id="game-over-menu" class="menu">
+                <h1>Game Over!</h1>
+                <p>Score: <span id="final-score">0</span></p>
+                <button id="restart-btn">Neustart</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // UI Elemente
+        const scoreDisplay = document.getElementById('score-display');
+        const startMenu = document.getElementById('start-menu');
+        const gameOverMenu = document.getElementById('game-over-menu');
+        const finalScoreSpan = document.getElementById('final-score');
+        const startBtn = document.getElementById('start-btn');
+        const restartBtn = document.getElementById('restart-btn');
+
+        // --- SCHWIERIGKEIT & PHYSIK (Hier anpassen) ---
+        const GRAVITY = 0.5;          // Wie schnell der Vogel fällt (höher = schwerer)
+        const JUMP_STRENGTH = -8;     // Sprungkraft (negativ, da y nach oben abnimmt)
+        const PIPE_SPEED = 3;         // Geschwindigkeit der Röhren nach links
+        const PIPE_SPAWN_RATE = 100;  // Frames zwischen neuen Röhren (kleiner = mehr Röhren)
+        const PIPE_GAP = 140;         // Lücke zwischen oberer und unterer Röhre (kleiner = schwerer)
+        const PIPE_WIDTH = 60;        // Breite der Röhren
+        // ----------------------------------------------
+
+        // Spielstatus
+        let frames = 0;
+        let score = 0;
+        let isPlaying = false;
+        let isGameOver = false;
+        let animationId;
+
+        // Der Vogel
+        const bird = {
+            x: 100,
+            y: 300,
+            radius: 15,
+            velocity: 0,
+            
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#f4d03f'; // Gelb
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.closePath();
+
+                // Kleines Auge für den Charme
+                ctx.beginPath();
+                ctx.arc(this.x + 6, this.y - 4, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#000';
+                ctx.fill();
+                ctx.closePath();
+            },
+            
+            update() {
+                this.velocity += GRAVITY;
+                this.y += this.velocity;
+            },
+
+            jump() {
+                this.velocity = JUMP_STRENGTH;
+            },
+
+            reset() {
+                this.y = canvas.height / 2;
+                this.velocity = 0;
+            }
+        };
+
+        // Röhren-Array
+        let pipes = [];
+
+        function spawnPipe() {
+            // Mindesthöhe einer Röhre
+            const minPipeHeight = 50;
+            // Maximalhöhe der oberen Röhre (Canvas-Höhe - Lücke - Boden/Mindesthöhe)
+            const maxTopPipeHeight = canvas.height - PIPE_GAP - minPipeHeight;
+            // Zufällige Höhe der oberen Röhre
+            const topHeight = Math.floor(Math.random() * (maxTopPipeHeight - minPipeHeight + 1)) + minPipeHeight;
+            
+            pipes.push({
+                x: canvas.width,
+                topHeight: topHeight,
+                bottomY: topHeight + PIPE_GAP, // Start Y-Koordinate der unteren Röhre
+                passed: false // Um den Score nur einmal zu zählen
+            });
+        }
+
+        function drawPipes() {
+            ctx.fillStyle = '#2ecc71'; // Grün
+            ctx.strokeStyle = '#27ae60'; // Dunkleres Grün für den Rand
+            ctx.lineWidth = 4;
+
+            for (let i = 0; i < pipes.length; i++) {
+                let p = pipes[i];
+                
+                // Obere Röhre
+                ctx.fillRect(p.x, 0, PIPE_WIDTH, p.topHeight);
+                ctx.strokeRect(p.x, 0, PIPE_WIDTH, p.topHeight);
+                
+                // Untere Röhre
+                let bottomHeight = canvas.height - p.bottomY;
+                ctx.fillRect(p.x, p.bottomY, PIPE_WIDTH, bottomHeight);
+                ctx.strokeRect(p.x, p.bottomY, PIPE_WIDTH, bottomHeight);
+            }
+        }
+
+        function updatePipes() {
+            for (let i = 0; i < pipes.length; i++) {
+                let p = pipes[i];
+                p.x -= PIPE_SPEED;
+
+                // Kollisionsabfrage
+                // Vogel-Box (vereinfacht als Quadrat für die Röhren-Kollision)
+                let birdLeft = bird.x - bird.radius + 4;   // +4/-4 für etwas gnädigere Hitboxen
+                let birdRight = bird.x + bird.radius - 4;
+                let birdTop = bird.y - bird.radius + 4;
+                let birdBottom = bird.y + bird.radius - 4;
+
+                let inPipeX = birdRight > p.x && birdLeft < p.x + PIPE_WIDTH;
+                let hitTopPipe = inPipeX && birdTop < p.topHeight;
+                let hitBottomPipe = inPipeX && birdBottom > p.bottomY;
+
+                if (hitTopPipe || hitBottomPipe) {
+                    gameOver();
+                }
+
+                // Scoring
+                if (p.x + PIPE_WIDTH < bird.x && !p.passed) {
+                    score++;
+                    scoreDisplay.innerText = score;
+                    p.passed = true;
+                }
+            }
+
+            // Entferne Röhren, die den Bildschirm verlassen haben
+            if (pipes.length > 0 && pipes[0].x + PIPE_WIDTH < 0) {
+                pipes.shift();
+            }
+        }
+
+        function checkGroundCollision() {
+            // Berührt der Vogel den Boden oder fällt unten raus?
+            if (bird.y + bird.radius >= canvas.height) {
+                bird.y = canvas.height - bird.radius; // Nicht tiefer fallen lassen
+                gameOver();
+            }
+            // Decke berühren (optional: blockieren oder ebenfalls sterben lassen)
+            if (bird.y - bird.radius <= 0) {
+                bird.y = bird.radius;
+                bird.velocity = 0; // Verhindert ewiges Hochfliegen
+            }
+        }
+
+        function drawBackground() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Einfacher Boden am unteren Rand
+            ctx.fillStyle = '#ded895'; // Sandfarbe
+            ctx.fillRect(0, canvas.height - 15, canvas.width, 15);
+            ctx.fillStyle = '#73bf2e'; // Grasrand
+            ctx.fillRect(0, canvas.height - 25, canvas.width, 10);
+        }
+
+        function gameLoop() {
+            if (!isPlaying) return;
+
+            drawBackground();
+
+            bird.update();
+            checkGroundCollision();
+
+            if (frames % PIPE_SPAWN_RATE === 0) {
+                spawnPipe();
+            }
+
+            updatePipes();
+            
+            // Renderreihenfolge: Röhren im Hintergrund, Vogel im Vordergrund
+            drawPipes();
+            bird.draw();
+
+            frames++;
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            // Variablen zurücksetzen
+            bird.reset();
+            pipes = [];
+            score = 0;
+            frames = 0;
+            scoreDisplay.innerText = score;
+            
+            // UI anpassen
+            startMenu.style.display = 'none';
+            gameOverMenu.style.display = 'none';
+            scoreDisplay.style.display = 'block';
+            
+            isPlaying = true;
+            isGameOver = false;
+            
+            // Startschuss
+            bird.jump();
+            gameLoop();
+        }
+
+        function gameOver() {
+            isPlaying = false;
+            isGameOver = true;
+            cancelAnimationFrame(animationId);
+            
+            finalScoreSpan.innerText = score;
+            gameOverMenu.style.display = 'block';
+            scoreDisplay.style.display = 'none';
+        }
+
+        function handleInput(e) {
+            // Verhindern von Standardaktionen wie Scrollen bei Leertaste
+            if (e.code === 'Space') {
+                e.preventDefault();
+            }
+            
+            if (isPlaying) {
+                bird.jump();
+            } else if (isGameOver && (e.code === 'Space' || e.type === 'mousedown')) {
+                // Komfort-Feature: Neustart per Leertaste oder Klick ins Bild
+                startGame();
+            }
+        }
+
+        // Event Listeners
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') handleInput(e);
+        });
+        
+        canvas.addEventListener('mousedown', handleInput);
+        canvas.addEventListener('touchstart', handleInput, {passive: false}); // Für Mobile
+
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+
+        // Initiale Darstellung (Vogel schwebt im Startbildschirm)
+        drawBackground();
+        bird.draw();
+
+    </script>
+</body>
+</html>
