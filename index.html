@@ -10,7 +10,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    background: #0a0a12;
+    background: #1a1a2e;
     color: #e0e0e0;
     font-family: 'Rajdhani', sans-serif;
     font-size: 22px;
@@ -293,7 +293,7 @@
   }
 
   .game-card {
-    background: linear-gradient(135deg, rgba(15,15,30,0.95), rgba(20,20,40,0.95));
+    background: linear-gradient(135deg, rgba(30,30,55,0.95), rgba(38,38,65,0.95));
     border: 1px solid rgba(255,120,20,0.12);
     border-radius: 12px;
     padding: 28px 32px;
@@ -437,7 +437,7 @@
     padding: 20px 24px;
     border: 1px solid rgba(255,120,20,0.12);
     border-radius: 12px;
-    background: rgba(15,15,30,0.7);
+    background: rgba(30,30,55,0.7);
   }
 
   .game-nav a {
@@ -716,7 +716,7 @@ function renderGames() {
         <span class="game-ai">${game.ai}</span>
       </div>
       <div class="game-link">
-        <a href="${game.link}" target="_blank">
+        <a href="${game.link}">
           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
           Spielen
         </a>
@@ -752,6 +752,7 @@ function createParticles() {
     p.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
     p.style.animationDuration = (3 + Math.random() * 7) + 's';
     p.style.animationDelay = (Math.random() * 10) + 's';
+    const size = isSpark ? (1 + Math.random() * 2) : (2 + Math.random() * 4);
     p.style.width = size + 'px';
     p.style.height = size + 'px';
     if (!isSpark) {
