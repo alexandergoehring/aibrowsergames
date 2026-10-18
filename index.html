@@ -427,6 +427,27 @@
     font-style: normal;
   }
 
+  .game-original {
+    font-size: 1.05rem;
+    color: rgba(255,255,255,0.6);
+    line-height: 1.6;
+  }
+
+  .game-original strong {
+    color: rgba(85,255,170,0.8);
+    font-weight: 600;
+  }
+
+  .game-original a {
+    color: rgba(85,255,170,0.9);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .game-original a:hover {
+    color: #55ffaa;
+  }
+
   /* === NAV LINKS === */
   .game-nav {
     display: flex;
@@ -645,6 +666,7 @@ const games = [
     ai: "Claude Opus 5.5",
     prompt: "Früher zu DDR-Zeiten gab es eine Arcade-Reihe namens Polyplay. Ich hätte gerne, dass ein browserbasiertes Spiel erstellt wird oder mehrere aus dieser Polyplay-Spielereihe. Fange zum Beispiel an mit Schießbude.",
     notes: "Alle 8 Spiele des Automaten mit Spielauswahl: Hirschjagd, Hase und Wolf, Schmetterlinge, Schießbude, Autorennen, Merkspiel, Wasserrohrbruch, Abfahrtslauf",
+    original: { url: "https://archive.org/details/arcade_polyplay", label: "Original-Polyplay im Internet Archive (spielbar im Emulator)" },
     link: "polyplay/index.html"
   },
   {
@@ -756,6 +778,7 @@ function renderGames() {
       <div class="game-details">
         <div class="game-prompt"><strong>Prompt:</strong> ${game.prompt}</div>
         ${game.notes ? `<div class="game-notes"><strong>Anmerkung:</strong> ${game.notes}</div>` : ''}
+        ${game.original ? `<div class="game-original"><strong>Original:</strong> <a href="${game.original.url}" target="_blank" rel="noopener">${game.original.label}</a></div>` : ''}
       </div>
     `;
     grid.appendChild(card);
