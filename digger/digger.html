@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Digger</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #000; overflow: hidden; }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-family: "Courier New", Courier, monospace;
+    color: #fff;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas#game {
+    display: block;
+    background: #000;
+    border: 3px solid #555;
+    box-shadow: 0 0 40px rgba(85, 255, 255, 0.12);
+  }
+  #touch {
+    display: none;
+    width: 100%;
+    max-width: 640px;
+    padding: 0 16px;
+    justify-content: space-between;
+    align-items: center;
+  }
+  @media (pointer: coarse) { #touch { display: flex; } }
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 56px);
+    grid-template-rows: repeat(3, 56px);
+    gap: 4px;
+  }
+  .dpad button, #fireBtn {
+    background: #222;
+    color: #55ff55;
+    border: 2px solid #555;
+    border-radius: 8px;
+    font: bold 22px "Courier New", monospace;
+    touch-action: none;
+  }
+  .dpad button:active, #fireBtn:active { background: #444; }
+  .dpad [data-dir="up"] { grid-column: 2; grid-row: 1; }
+  .dpad [data-dir="left"] { grid-column: 1; grid-row: 2; }
+  .dpad [data-dir="right"] { grid-column: 3; grid-row: 2; }
+  .dpad [data-dir="down"] { grid-column: 2; grid-row: 3; }
+  #fireBtn { width: 96px; height: 96px; border-radius: 50%; color: #ffff55; font-size: 18px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="touch">
+  <div class="dpad">
+    <button data-dir="up">&#9650;</button>
+    <button data-dir="left">&#9664;</button>
+    <button data-dir="right">&#9654;</button>
+    <button data-dir="down">&#9660;</button>
+  </div>
+  <button id="fireBtn">FEUER</button>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+//  KONSTANTEN
+// ============================================================
+const COLS = 15, ROWS = 10, CELL = 40, HUD = 40;
+const W = COLS * CELL, FIELD_H = ROWS * CELL, H = FIELD_H + HUD;
+const SC = 2;                 // interne Auflösung (scharfe Pixel & Schrift)
+const TUN = 34;               // Tunnelbreite in Pixeln
+const SPAWN = { c: 14, r: 0 };  // Monster-Eingang oben rechts (wie im Original)
+const START = { c: 7, r: 9 };   // Digger startet unten in der Mitte
+const DIGGER_SPEED = 4.2;     // Zellen pro Sekunde
+const PEA_SPEED = 14;
+const BAG_FALL_SPEED = 6;
+const WOBBLE_TIME = 0.65;
+const GOLD_LIFETIME = 10;
+const EXTRA_LIFE_EVERY = 20000;
+const MAX_LIVES = 5;
+
+const DIRS = {
+  up:    { dx: 0, dy: -1 },
+  down:  { dx: 0, dy: 1 },
+  left:  { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
+};
+const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
+const DIR_LIST = ['up', 'down', 'left', 'right'];
+
+// ============================================================
+//  LEVEL-LAYOUTS  (15 x 10)
+//  ' ' Erde   C Smaragd   B Goldsack
+//  H horizontaler Tunnel   V vertikaler Tunnel   S Kreuzung
+// ============================================================
+const LEVELS = [
+  [
+    "S   B     HHHHS",
+    "V  CC  C  V B  ",
+    "VB CC  C  V    ",
+    "V  CCB CB V CCC",
+    "V  CC  C  V CCC",
+    "HH CC  C  V CCC",
+    " V    B B V    ",
+    " HHHH     V    ",
+    "C   V     V   C",
+    "CC  HHHHHHH  CC",
+  ],
+  [
+    "CB  V     HHHHS",
+    "CC  V  CC VB  V",
+    "CC  V  CC V B V",
+    " B  V  CC V   V",
+    "CC  V  CC V CCV",
+    "CC  HHHHHHH CCV",
+    "  B    V    CCV",
+    " CCC   V  B  BV",
+    " CCC   V      V",
+    "HHHHHHHHHHHHHHH",
+  ],
+  [
+    "HHHHH  B  HHHHS",
+    "CC  V CCC V   V",
+    "CC  V CCC V B V",
+    "B   V     V B V",
+    "CC  HHHHHHH CC ",
+    "CC     V    CC ",
+    "  B CC V CC  B ",
+    " CC CC V CC CC ",
+    " CC    V    CC ",
+    "     HHHHH     ",
+  ],
+  [
+    "C  B   C  HHHHS",
+    "CC    CCC V    ",
+    "CCC  CCCCCV B  ",
+    "HHHHHHHH  V    ",
+    "   B   V  HHHHH",
+    " CCC   V  B   V",
+    " CCC B V CCC  V",
+    " CCC   V CCC  V",
+    "       V      V",
+    "B  HHHHHHHHHHHH",
+  ],
+  [
+    "HHHHHHHHHHHHHHS",
+    "V   B   B    CV",
+    "V CCC CCC CCCCV",
+    "V CCC CCC CCCCV",
+    "V  B   B   B  V",
+    "V CC  CCC  CC V",
+    "V CC  CCC  CC V",
+    "V   B     B   V",
+    "V             V",
+    "HHHHHHHHHHHHHHH",
+  ],
+  [
+    "CCCC  B   CCC S",
+    "CCCC      CCC V",
+    "  B  HHHHHHHHHH",
+    " CC  V   B     ",
+    " CC  V  CCC B  ",
+    " CC  V  CCC    ",
+    "B    V  CCC  CC",
+    "CC   HHHHH   CC",
+    "CC       V   CC",
+    "  B    HHH  B  ",
+  ],
+  [
+    " B  CCCC  HHHHS",
+    "    CCCC  V    ",
+    "HHHHHHHHHHH  B ",
+    "V   B    CC    ",
+    "V  CCC   CC CCC",
+    "V  CCC B    CCC",
+    "HHHHH   CC  B  ",
+    "  B V   CC  CC ",
+    " CC V       CC ",
+    " CC HHHHHHH    ",
+  ],
+  [
+    "CC   B    HHHHS",
+    "CC        V  B ",
+    "  CCCC B  V    ",
+    "  CCCC    V CC ",
+    " B     HHHH CC ",
+    "CCC    V    CC ",
+    "CCC B  V  B    ",
+    "CCC    V  CCCCC",
+    "   HHHHH  CCCCC",
+    "B  V   S       ",
+  ],
+];
+
+// Erdfarben je Level: [Grundfarbe, dunkel, hell]
+const DIRT_PALS = [
+  ['#AA5500', '#7A3D00', '#C9771F'],
+  ['#9C4A1C', '#6B2E0E', '#B8622E'],
+  ['#8A6A20', '#5E4510', '#A88530'],
+  ['#AA3F1E', '#782A10', '#C45A35'],
+  ['#7E5530', '#55361A', '#9A6E45'],
+  ['#A0602A', '#6E3E14', '#BF7A3C'],
+];
+
+// ============================================================
+//  PIXEL-SPRITES  (CGA/EGA-Palette)
+// ============================================================
+const PAL = {
+  K: '#000000', Y: '#FFFF55', G: '#55FF55', g: '#00AA00', C: '#55FFFF', c: '#00AAAA',
+  R: '#FF5555', r: '#AA0000', M: '#FF55FF', m: '#AA00AA', W: '#FFFFFF', D: '#AAAAAA',
+  d: '#555555', O: '#AA5500', B: '#5555FF', b: '#0000AA', P: '#FFCC99',
+};
+
+const SPR_SRC = {
+  digger1: [
+    "............",
+    "..YYYY......",
+    ".YYCCY......",
+    ".YYCCY......",
+    "GGGGGGGGG...",
+    "GGGGGGGGGRR.",
+    "GgGGGGGGgRRR",
+    "GGGGGGGGGRR.",
+    "GGGGGGGGG...",
+    "DDDDDDDDDD..",
+    "DdDdDdDdDd..",
+    ".DDDDDDDD...",
+  ],
+  digger2: [
+    "............",
+    "..YYYY......",
+    ".YYCCY......",
+    ".YYCCY......",
+    "GGGGGGGGG...",
+    "GGGGGGGGGR.R",
+    "GgGGGGGGgRR.",
+    "GGGGGGGGGR.R",
+    "GGGGGGGGG...",
+    "DDDDDDDDDD..",
+    "dDdDdDdDdD..",
+    ".DDDDDDDD...",
+  ],
+  nobbin1: [
+    "....MMMM....",
+    "..MMWMMMMM..",
+    ".MMMMMMMWMM.",
+    "MMWMMMMMMMMM",
+    "MMMMMMWMMMWM",
+    "..mmmmmmmm..",
+    "..PWKPPWKP..",
+    "..PPPPPPPP..",
+    "..PPrrrrPP..",
+    "...PPPPPP...",
+    "...M....M...",
+    "..MM....MM..",
+  ],
+  nobbin2: [
+    "....MMMM....",
+    "..MMWMMMMM..",
+    ".MMMMMMMWMM.",
+    "MMWMMMMMMMMM",
+    "MMMMMMWMMMWM",
+    "..mmmmmmmm..",
+    "..PWKPPWKP..",
+    "..PPPPPPPP..",
+    "..PPrrrrPP..",
+    "...PPPPPP...",
+    "....M..M....",
+    "...MM..MM...",
+  ],
+  hobbin1: [
+    "..r......r..",
+    "..rR....Rr..",
+    "...RRRRRR...",
+    "..RRRRRRRR..",
+    ".RRRRRYKRYK.",
+    ".RRRRRRRRRR.",
+    "RRRRRRRRRRRR",
+    "RRRWKWKWKWKR",
+    "RRRKKKKKKKKR",
+    "RRRKWKWKWKWR",
+    ".RRRRRRRRRR.",
+    ".RR..RR..RR.",
+  ],
+  hobbin2: [
+    "..r......r..",
+    "..rR....Rr..",
+    "...RRRRRR...",
+    "..RRRRRRRR..",
+    ".RRRRRYKRYK.",
+    ".RRRRRRRRRR.",
+    "RRRRRRRRRRRR",
+    "RRRWKWKWKWKR",
+    "RRRKKKKKKKKR",
+    "RRRKWKWKWKWR",
+    ".RRRRRRRRRR.",
+    "RR..RR..RR..",
+  ],
+  emerald: [
+    "............",
+    "...CCCCCC...",
+    "..CWWCCCCC..",
+    ".CWCCCCCCCC.",
+    "CCCCCCCCCCCC",
+    ".cCCCCCCCCc.",
+    "..cccccccc..",
+    "...cccccc...",
+    "....cccc....",
+    ".....cc.....",
+  ],
+  bag: [
+    ".....OO.....",
+    "....YOOY....",
+    ".....YY.....",
+    "...YYYYYY...",
+    "..YYYYOYYY..",
+    ".YYYYOOOOYY.",
+    "YYYYOYOYYYYY",
+    "YYYYYOOOYYYY",
+    "YYYYYYOYOYYY",
+    "YYYYOOOOYYYY",
+    ".YYYYYOYYYY.",
+    "..YYYYYYYY..",
+  ],
+  gold: [
+    "............",
+    "............",
+    "............",
+    "............",
+    ".....Y......",
+    "....YYY..Y..",
+    "..Y.YOYYYYY.",
+    ".YYYYYYYOYY.",
+    "YYOYYYYYYYYY",
+    "YYYYYOYYYOYY",
+    "YOYYYYYYYYYY",
+    "............",
+  ],
+  cherry: [
+    "......ggg...",
+    ".....g..g...",
+    "....g....g..",
+    "...g.....g..",
+    "..g......g..",
+    ".RRR.....g..",
+    "RRWRR...RRR.",
+    "RRRRR..RRWRR",
+    "RRRRR..RRRRR",
+    ".RRR...RRRRR",
+    "........RRR.",
+    "............",
+  ],
+  grave: [
+    "....dddd....",
+    "..dDDDDDDd..",
+    ".dDDDKKDDDd.",
+    ".dDDDKKDDDd.",
+    ".dDKKKKKKDd.",
+    ".dDKKKKKKDd.",
+    ".dDDDKKDDDd.",
+    ".dDDDKKDDDd.",
+    ".dDDDKKDDDd.",
+    ".dDDDDDDDDd.",
+    "gggggggggggg",
+    "GgGgGgGgGgGg",
+  ],
+};
+
+function makeSprite(rows, remap) {
+  const h = rows.length, w = rows[0].length;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d');
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let ch = rows[y][x];
+      if (ch === '.') continue;
+      if (remap && remap[ch]) ch = remap[ch];
+      c.fillStyle = PAL[ch] || ch;
+      c.fillRect(x, y, 1, 1);
+    }
+  }
+  return cv;
+}
+
+const SPR = {};
+for (const k in SPR_SRC) SPR[k] = makeSprite(SPR_SRC[k]);
+// Bonus-Modus: Monster werden blau bzw. blinken weiß
+const BLUE = { M: 'B', m: 'b', R: 'B', r: 'b', P: 'C', Y: 'W' };
+const WHITE = { M: 'W', m: 'D', R: 'W', r: 'D', P: 'W', Y: 'K' };
+// Verwandlung Nobbin -> Hobbin: kurz weiß
+for (const k of ['nobbin1', 'nobbin2', 'hobbin1', 'hobbin2']) {
+  SPR[k + 'Blue'] = makeSprite(SPR_SRC[k], BLUE);
+  SPR[k + 'White'] = makeSprite(SPR_SRC[k], WHITE);
+}
+
+// ============================================================
+//  CANVAS
+// ============================================================
+const canvas = document.getElementById('game');
+canvas.width = W * SC;
+canvas.height = H * SC;
+const ctx = canvas.getContext('2d');
+
+const dirtCanvas = document.createElement('canvas');
+dirtCanvas.width = W * SC;
+dirtCanvas.height = FIELD_H * SC;
+const dctx = dirtCanvas.getContext('2d');
+dctx.setTransform(SC, 0, 0, SC, 0, 0);
+
+function fitCanvas() {
+  const touch = document.getElementById('touch');
+  const touchH = getComputedStyle(touch).display === 'none' ? 0 : touch.offsetHeight + 12;
+  const availW = window.innerWidth - 16;
+  const availH = window.innerHeight - 16 - touchH;
+  const scale = Math.max(0.3, Math.min(availW / W, availH / H));
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+
+function drawSprite(spr, cx, cy, opts = {}) {
+  const s = opts.scale || 3;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(cx, cy);
+  if (opts.rot) ctx.rotate(opts.rot);
+  if (opts.flip) ctx.scale(-1, 1);
+  if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
+  ctx.drawImage(spr, -spr.width * s / 2, -spr.height * s / 2, spr.width * s, spr.height * s);
+  ctx.restore();
+}
+
+// ============================================================
+//  AUDIO (WebAudio, Rechteck-Töne wie der PC-Speaker)
+// ============================================================
+let actx = null, master = null, muted = false;
+let musicNodes = [];
+
+function ensureAudio() {
+  if (!actx) {
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      master = actx.createGain();
+      master.gain.value = 0.5;
+      master.connect(actx.destination);
+    } catch (e) { actx = null; }
+  }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+
+function tone(freq, dur, o = {}) {
+  if (!actx || muted) return null;
+  const t0 = actx.currentTime + (o.when || 0);
+  const osc = actx.createOscillator();
+  const g = actx.createGain();
+  osc.type = o.type || 'square';
+  osc.frequency.setValueAtTime(freq, t0);
+  if (o.slide) osc.frequency.exponentialRampToValueAtTime(o.slide, t0 + dur);
+  const vol = o.vol || 0.06;
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.setValueAtTime(vol, t0 + dur * 0.7);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(g).connect(master);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+  return osc;
+}
+
+function noise(dur, vol = 0.15, when = 0) {
+  if (!actx || muted) return;
+  const t0 = actx.currentTime + when;
+  const len = Math.floor(actx.sampleRate * dur);
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  const g = actx.createGain();
+  g.gain.value = vol;
+  const f = actx.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = 1400;
+  src.connect(f).connect(g).connect(master);
+  src.start(t0);
+}
+
+const NOTE_IDX = { C: -9, 'C#': -8, Db: -8, D: -7, 'D#': -6, Eb: -6, E: -5, F: -4, 'F#': -3, Gb: -3, G: -2, 'G#': -1, Ab: -1, A: 0, 'A#': 1, Bb: 1, B: 2 };
+function nf(n) {
+  const m = n.match(/^([A-G][#b]?)(\d)$/);
+  return 440 * Math.pow(2, (NOTE_IDX[m[1]] + (parseInt(m[2], 10) - 4) * 12) / 12);
+}
+
+// Melodie abspielen; music=true -> kann mit stopMusic() abgebrochen werden
+function melody(notes, beat, o = {}) {
+  if (!actx || muted) return 0;
+  let t = o.when || 0;
+  for (const [n, len] of notes) {
+    if (n) {
+      const osc = tone(nf(n), len * beat * 0.92, { when: t, vol: o.vol || 0.05, type: o.type || 'square' });
+      if (o.music && osc) musicNodes.push(osc);
+    }
+    t += len * beat;
+  }
+  return t;
+}
+
+function stopMusic() {
+  for (const n of musicNodes) { try { n.stop(); } catch (e) { /* bereits gestoppt */ } }
+  musicNodes = [];
+}
+
+// Chopins Trauermarsch – wie im Original beim Tod des Diggers
+const FUNERAL = [['C4', 1], ['C4', .75], ['C4', .25], ['C4', 1], ['Eb4', .75], ['D4', .25],
+  ['D4', .75], ['C4', .25], ['C4', .75], ['B3', .25], ['C4', 2]];
+// Rossinis Wilhelm-Tell-Galopp – wie im Original im Bonus-Modus
+const GALLOP = [['B4', .5], ['B4', .5], ['B4', 1], ['B4', .5], ['B4', .5], ['B4', 1],
+  ['B4', .5], ['B4', .5], ['E5', 1], ['F#5', 1], ['G#5', 2],
+  ['B4', .5], ['B4', .5], ['B4', 1], ['B4', .5], ['B4', .5], ['E5', 1],
+  ['G#5', .5], ['G#5', .5], ['F#5', 1], ['D#5', 1], ['E5', 2]];
+
+const SFX = {
+  emerald(streak) {
+    const steps = [0, 2, 4, 5, 7, 9, 11, 12];
+    tone(523 * Math.pow(2, steps[Math.min(streak, 8) - 1] / 12), 0.07, { vol: 0.05 });
+  },
+  streak() { [0, 4, 7, 12].forEach((s, i) => tone(784 * Math.pow(2, s / 12), 0.07, { when: i * 0.06 })); },
+  gold() { tone(880, 0.08); tone(1320, 0.12, { when: 0.08 }); },
+  fire() { tone(1400, 0.12, { slide: 300, vol: 0.05 }); },
+  explode() { noise(0.25, 0.25); },
+  kill() { tone(500, 0.3, { slide: 60, type: 'sawtooth', vol: 0.06 }); },
+  wobble() { tone(140, 0.03, { vol: 0.04 }); },
+  thud() { noise(0.12, 0.3); tone(90, 0.1, { vol: 0.08 }); },
+  breakBag() { noise(0.15, 0.3); [1046, 784, 659, 523].forEach((f, i) => tone(f, 0.06, { when: 0.05 + i * 0.05 })); },
+  transform() { tone(250, 0.25, { slide: 900, type: 'sawtooth', vol: 0.06 }); },
+  extraLife() { [523, 659, 784, 1046, 1318].forEach((f, i) => tone(f, 0.09, { when: i * 0.08 })); },
+  cherryAppear() { tone(1046, 0.08); tone(1568, 0.1, { when: 0.1 }); },
+  eat() { tone(300, 0.15, { slide: 1500, vol: 0.06 }); },
+  levelClear() { melody([['C5', .5], ['E5', .5], ['G5', .5], ['C6', 1], ['G5', .5], ['C6', 2]], 0.13); },
+  death() { melody(FUNERAL, 0.36, { type: 'triangle', vol: 0.12, music: true }); },
+  bonusMusic(duration) {
+    let t = 0;
+    while (t < duration) t += melody(GALLOP, 0.11, { when: t, vol: 0.04, music: true });
+  },
+};
+
+// ============================================================
+//  SPIELZUSTAND
+// ============================================================
+let state = 'title';          // title | play | dying | levelclear | gameover
+let paused = false;
+let score = 0, lives = 3, level = 1, nextLifeAt = EXTRA_LIFE_EVERY;
+let hiScore = 0;
+try { hiScore = parseInt(localStorage.getItem('digger-highscore') || '0', 10) || 0; } catch (e) { /* kein Storage */ }
+let newHi = false;
+
+let cellDug, edgeH, edgeV, emeralds, emeraldsLeft;
+let bags, golds, monsters, digger, pea, peaCooldown;
+let monstersTotal, monstersSpawned, monstersKilled, maxOnField, spawnTimer;
+let cherry, cherryTimer, cherriesThisLevel, bonusTimer, bonusDuration, bonusEaten;
+let effects, texts, distMap;
+let gameTime = 0, stateTime = 0, flashTime = 0;
+let lastEmeraldTime = -10, emeraldStreak = 0;
+let lastFallTime = -10, fallChain = 0;
+
+function grid(v) { return Array.from({ length: ROWS }, () => new Array(COLS).fill(v)); }
+function inBounds(c, r) { return c >= 0 && c < COLS && r >= 0 && r < ROWS; }
+
+function edgeDug(c1, r1, c2, r2) {
+  if (r1 === r2) return edgeH[r1][Math.min(c1, c2)];
+  return edgeV[Math.min(r1, r2)][c1];
+}
+function setEdge(c1, r1, c2, r2) {
+  if (r1 === r2) edgeH[r1][Math.min(c1, c2)] = true;
+  else edgeV[Math.min(r1, r2)][c1] = true;
+}
+
+function bagAt(c, r, except) {
+  for (const b of bags) if (b !== except && Math.round(b.x) === c && Math.round(b.y) === r) return b;
+  return null;
+}
+function goldAt(c, r) {
+  for (const g of golds) if (g.c === c && g.r === r) return g;
+  return null;
+}
+
+// Monster dürfen nur durch fertige Tunnel laufen
+function passable(c, r, nc, nr) {
+  return inBounds(nc, nr) && cellDug[nr][nc] && edgeDug(c, r, nc, nr) && !bagAt(nc, nr);
+}
+
+// ---------------- Erde zeichnen & graben ----------------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function buildDirt() {
+  const pal = DIRT_PALS[(level - 1) % DIRT_PALS.length];
+  const rnd = mulberry32(level * 977 + 13);
+  dctx.globalCompositeOperation = 'source-over';
+  dctx.fillStyle = pal[0];
+  dctx.fillRect(0, 0, W, FIELD_H);
+  // grobe Pixel-Struktur im CGA-Stil
+  for (let y = 0; y < FIELD_H; y += 4) {
+    for (let x = 0; x < W; x += 4) {
+      const v = rnd();
+      if (v < 0.16) { dctx.fillStyle = pal[1]; dctx.fillRect(x, y, 4, 4); }
+      else if (v < 0.22) { dctx.fillStyle = pal[2]; dctx.fillRect(x, y, 4, 4); }
+    }
+  }
+  // wellige Gesteinsschichten
+  dctx.fillStyle = pal[1];
+  for (let row = 0; row < FIELD_H / 20; row++) {
+    const off = (row % 2) * 10;
+    for (let x = -20; x < W; x += 20) {
+      dctx.fillRect(x + off, row * 20 + 14, 4, 2);
+      dctx.fillRect(x + off + 4, row * 20 + 16, 8, 2);
+      dctx.fillRect(x + off + 12, row * 20 + 14, 4, 2);
+    }
+  }
+}
+
+function carve(px, py, w, h) {
+  dctx.globalCompositeOperation = 'destination-out';
+  dctx.fillStyle = '#000';
+  dctx.beginPath();
+  if (dctx.roundRect) dctx.roundRect(px, py, w, h, 9);
+  else dctx.rect(px, py, w, h);
+  dctx.fill();
+  dctx.globalCompositeOperation = 'source-over';
+}
+function carveAt(x, y) {   // x,y in Zellkoordinaten
+  carve(x * CELL + (CELL - TUN) / 2, y * CELL + (CELL - TUN) / 2, TUN, TUN);
+}
+
+// ---------------- Level laden ----------------
+function loadLevel() {
+  const map = LEVELS[(level - 1) % LEVELS.length];
+  cellDug = grid(false); edgeH = grid(false); edgeV = grid(false); emeralds = grid(false);
+  bags = []; golds = []; monsters = []; effects = []; texts = [];
+  emeraldsLeft = 0;
+  const isTun = ch => ch === 'H' || ch === 'V' || ch === 'S';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const ch = map[r][c];
+      if (ch === 'C') { emeralds[r][c] = true; emeraldsLeft++; }
+      else if (ch === 'B') bags.push({ x: c, y: r, c, r, state: 'rest', t: 0, fallFrom: r, crush: 0 });
+      else if (isTun(ch)) cellDug[r][c] = true;
+    }
+  }
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const a = map[r][c];
+      if (!isTun(a)) continue;
+      if (c + 1 < COLS) {
+        const b = map[r][c + 1];
+        if (isTun(b) && (a === 'H' || a === 'S' || b === 'H' || b === 'S')) edgeH[r][c] = true;
+      }
+      if (r + 1 < ROWS) {
+        const b = map[r + 1][c];
+        if (isTun(b) && (a === 'V' || a === 'S' || b === 'V' || b === 'S')) edgeV[r][c] = true;
+      }
+    }
+  }
+  buildDirt();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (cellDug[r][c]) carveAt(c, r);
+      if (edgeH[r][c]) carve(c * CELL + CELL / 2, r * CELL + (CELL - TUN) / 2, CELL, TUN);
+      if (edgeV[r][c]) carve(c * CELL + (CELL - TUN) / 2, r * CELL + CELL / 2, TUN, CELL);
+    }
+  }
+
+  monstersTotal = Math.min(4 + level, 14);
+  monstersSpawned = 0;
+  monstersKilled = 0;
+  maxOnField = Math.min(3 + Math.floor((level - 1) / 2), 6);
+  spawnTimer = 2.5;
+  cherry = null;
+  cherryTimer = 20;
+  cherriesThisLevel = 0;
+  bonusTimer = 0;
+  bonusDuration = Math.max(5, 12 - level);
+  emeraldStreak = 0;
+  fallChain = 0;
+  resetDigger();
+}
+
+function resetDigger() {
+  digger = {
+    fx: START.c, fy: START.r, tx: START.c, ty: START.r, p: 0, moving: null, dugMid: true,
+    x: START.c, y: START.r, face: 'right', anim: 0, dead: false, pushBag: null,
+  };
+  pea = null;
+  peaCooldown = 0;
+}
+
+function nobbinSpeed() { return Math.min(2.0 + 0.18 * (level - 1), 4.0); }
+function hobbinSpeed() { return Math.min(nobbinSpeed() * 1.35, 4.6); }
+function peaReload() { return Math.min(0.4 + 0.08 * level, 1.4); }
+
+function newGame() {
+  score = 0; lives = 3; level = 1; nextLifeAt = EXTRA_LIFE_EVERY; newHi = false;
+  stopMusic();
+  loadLevel();
+  setState('play');
+}
+
+function setState(s) { state = s; stateTime = 0; }
+
+function addScore(n) {
+  score += n;
+  while (score >= nextLifeAt) {
+    nextLifeAt += EXTRA_LIFE_EVERY;
+    if (lives < MAX_LIVES) {
+      lives++;
+      SFX.extraLife();
+      floatText(digger.x, digger.y - 0.6, 'EXTRA LEBEN!', '#55FF55');
+    }
+  }
+  if (score > hiScore) { hiScore = score; newHi = true; }
+}
+
+function floatText(x, y, txt, col = '#FFFFFF') {
+  texts.push({ x, y, txt, col, t: 0 });
+}
+
+function explosion(x, y, col = '#FFFF55') {
+  const parts = [];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    parts.push({ a, v: 2 + Math.random() * 2 });
+  }
+  effects.push({ x, y, t: 0, dur: 0.45, parts, col });
+}
+
+// ============================================================
+//  INPUT
+// ============================================================
+const keyStack = [];
+const KEYMAP = {
+  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right',
+};
+function pressDir(dir) {
+  const i = keyStack.indexOf(dir);
+  if (i >= 0) keyStack.splice(i, 1);
+  keyStack.push(dir);
+}
+function releaseDir(dir) {
+  const i = keyStack.indexOf(dir);
+  if (i >= 0) keyStack.splice(i, 1);
+}
+function currentDir() { return keyStack.length ? keyStack[keyStack.length - 1] : null; }
+
+function actionKey() {
+  ensureAudio();
+  if (state === 'title') newGame();
+  else if (state === 'gameover' && stateTime > 1) { setState('title'); }
+  else if (state === 'play' && !paused) firePea();
+}
+
+window.addEventListener('keydown', e => {
+  ensureAudio();
+  const dir = KEYMAP[e.key];
+  if (dir) { pressDir(dir); e.preventDefault(); return; }
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    if (!e.repeat || state === 'play') actionKey();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (state !== 'play') actionKey();
+  } else if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
+    if (state === 'play' || state === 'dying' || state === 'levelclear') paused = !paused;
+  } else if (e.key === 'm' || e.key === 'M') {
+    muted = !muted;
+    if (muted) stopMusic();
+  }
+});
+window.addEventListener('keyup', e => {
+  const dir = KEYMAP[e.key];
+  if (dir) releaseDir(dir);
+});
+window.addEventListener('blur', () => { keyStack.length = 0; });
+
+// Touch-Steuerung
+document.querySelectorAll('.dpad button').forEach(btn => {
+  const dir = btn.dataset.dir;
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); ensureAudio(); pressDir(dir); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    btn.addEventListener(ev, () => releaseDir(dir));
+  }
+});
+document.getElementById('fireBtn').addEventListener('pointerdown', e => { e.preventDefault(); actionKey(); });
+canvas.addEventListener('pointerdown', () => { if (state !== 'play') actionKey(); });
+
+// ============================================================
+//  DIGGER
+// ============================================================
+function tryStartDigger(dir) {
+  const d = digger;
+  d.face = dir;
+  const { dx, dy } = DIRS[dir];
+  const nx = d.fx + dx, ny = d.fy + dy;
+  if (!inBounds(nx, ny)) return false;
+  const bag = bagAt(nx, ny);
+  if (bag) {
+    // Goldsäcke lassen sich nur seitlich schieben
+    if (dy !== 0 || bag.state !== 'rest') return false;
+    const bx = nx + dx;
+    if (!inBounds(bx, ny) || bagAt(bx, ny) || goldAt(bx, ny)) return false;
+    if (monsters.some(m => Math.abs(m.x - bx) < 0.9 && Math.abs(m.y - ny) < 0.9)) return false;
+    bag.state = 'push';
+    bag.pushFrom = nx;
+    bag.pushDx = dx;
+    d.pushBag = bag;
+  }
+  d.tx = nx; d.ty = ny; d.p = 0; d.moving = dir; d.dugMid = false;
+  return true;
+}
+
+function diggerEnterCell(fx, fy, tx, ty) {
+  cellDug[ty][tx] = true;
+  setEdge(fx, fy, tx, ty);
+  if (emeralds[ty][tx]) {
+    emeralds[ty][tx] = false;
+    emeraldsLeft--;
+    if (gameTime - lastEmeraldTime < 0.9) emeraldStreak++;
+    else emeraldStreak = 1;
+    lastEmeraldTime = gameTime;
+    addScore(25);
+    SFX.emerald(emeraldStreak);
+    if (emeraldStreak >= 8) {
+      addScore(250);
+      SFX.streak();
+      floatText(tx, ty - 0.5, '8er SERIE +250', '#55FFFF');
+      emeraldStreak = 0;
+    }
+  }
+}
+
+function updateDigger(dt) {
+  const d = digger;
+  const want = currentDir();
+  let dist = DIGGER_SPEED * dt;
+  let guard = 0;
+  while (dist > 0 && guard++ < 4) {
+    if (d.moving) {
+      // Umkehren ist jederzeit möglich (außer beim Schieben)
+      if (want && want === OPP[d.moving] && !d.pushBag) {
+        [d.fx, d.fy, d.tx, d.ty] = [d.tx, d.ty, d.fx, d.fy];
+        d.p = 1 - d.p;
+        d.moving = want;
+        d.face = want;
+        d.dugMid = true;
+      }
+      const step = Math.min(dist, 1 - d.p);
+      d.p += step;
+      dist -= step;
+      if (!d.dugMid && d.p >= 0.5) {
+        d.dugMid = true;
+        diggerEnterCell(d.fx, d.fy, d.tx, d.ty);
+      }
+      if (d.pushBag) d.pushBag.x = d.pushBag.pushFrom + d.pushBag.pushDx * d.p;
+      if (d.p >= 1) {
+        d.fx = d.tx; d.fy = d.ty; d.p = 0; d.moving = null;
+        if (d.pushBag) {
+          const b = d.pushBag;
+          b.x = b.c = b.pushFrom + b.pushDx;
+          b.state = 'rest';
+          d.pushBag = null;
+        }
+      }
+    } else {
+      if (!want || !tryStartDigger(want)) break;
+    }
+  }
+  d.x = d.fx + (d.tx - d.fx) * d.p;
+  d.y = d.fy + (d.ty - d.fy) * d.p;
+  if (d.moving) {
+    d.anim += dt;
+    carveAt(d.x, d.y);
+  }
+
+  // Gold & Bonuskirsche aufsammeln
+  for (let i = golds.length - 1; i >= 0; i--) {
+    const g = golds[i];
+    if (Math.abs(g.c - d.x) < 0.6 && Math.abs(g.r - d.y) < 0.6) {
+      golds.splice(i, 1);
+      addScore(500);
+      SFX.gold();
+      floatText(g.c, g.r - 0.3, '500', '#FFFF55');
+    }
+  }
+  if (cherry && Math.abs(cherry.c - d.x) < 0.6 && Math.abs(cherry.r - d.y) < 0.6) {
+    cherry = null;
+    cherryTimer = 30;
+    addScore(1000);
+    floatText(SPAWN.c - 0.5, SPAWN.r + 0.5, 'BONUS! +1000', '#FF5555');
+    bonusTimer = bonusDuration;
+    bonusEaten = 0;
+    flashTime = 0.25;
+    stopMusic();
+    SFX.bonusMusic(bonusDuration);
+  }
+}
+
+function killDigger() {
+  if (digger.dead) return;
+  digger.dead = true;
+  digger.pushBag = null;
+  bonusTimer = 0;
+  stopMusic();
+  SFX.death();
+  setState('dying');
+}
+
+// ============================================================
+//  ERBSE (Pea)
+// ============================================================
+function firePea() {
+  const d = digger;
+  if (pea || peaCooldown > 0 || d.dead) return;
+  pea = { x: d.x, y: d.y, dir: d.face };
+  SFX.fire();
+}
+
+function peaBlocked(c, r, nc, nr) {
+  return !(inBounds(nc, nr) && cellDug[nr][nc] && edgeDug(c, r, nc, nr) && !bagAt(nc, nr));
+}
+
+function endPea() {
+  explosion(pea.x, pea.y, '#FFFF55');
+  SFX.explode();
+  pea = null;
+  peaCooldown = peaReload();
+}
+
+function updatePea(dt) {
+  if (!pea) { if (peaCooldown > 0) peaCooldown -= dt; return; }
+  const { dx, dy } = DIRS[pea.dir];
+  let dist = PEA_SPEED * dt;
+  while (dist > 0 && pea) {
+    const step = Math.min(0.1, dist);
+    dist -= step;
+    const c = Math.round(pea.x), r = Math.round(pea.y);
+    const nx = pea.x + dx * step, ny = pea.y + dy * step;
+    const along = dx ? (nx - c) * dx : (ny - r) * dy;
+    if (along > 0.3 && peaBlocked(c, r, c + dx, r + dy)) { endPea(); return; }
+    pea.x = nx; pea.y = ny;
+    for (const m of monsters) {
+      if (m.spawnT > 0) continue;
+      if (Math.hypot(m.x - pea.x, m.y - pea.y) < 0.6) {
+        killMonster(m, 250);
+        endPea();
+        return;
+      }
+    }
+  }
+}
+
+// ============================================================
+//  GOLDSÄCKE
+// ============================================================
+function canFallInto(c, r, self) {
+  return r < ROWS && cellDug[r][c] && !bagAt(c, r, self) && !goldAt(c, r);
+}
+
+function diggerBelowBag(b) {
+  const d = digger;
+  if (d.dead) return false;
+  const vertical = !d.moving || d.moving === 'up' || d.moving === 'down';
+  return vertical && Math.abs(d.x - b.c) < 0.5 && d.y > b.r && d.y <= b.r + 1.05;
+}
+
+function updateBags(dt) {
+  for (let i = bags.length - 1; i >= 0; i--) {
+    const b = bags[i];
+    if (b.state === 'push') continue;
+    if (b.state === 'rest') {
+      if (canFallInto(b.c, b.r + 1, b)) { b.state = 'wobble'; b.t = 0; b.tick = 0; }
+    } else if (b.state === 'wobble') {
+      if (!canFallInto(b.c, b.r + 1, b)) { b.state = 'rest'; continue; }
+      // Steht der Digger direkt darunter, wartet der Sack (wie im Original)
+      if (!diggerBelowBag(b)) b.t += dt;
+      b.tick -= dt;
+      if (b.tick <= 0) { SFX.wobble(); b.tick = 0.1; }
+      if (b.t >= WOBBLE_TIME) startFall(b);
+    } else if (b.state === 'fall') {
+      b.y += BAG_FALL_SPEED * dt;
+      carveAt(b.c, b.y);
+      crushCheck(b);
+      if (b.y >= b.r + 1) {
+        setEdge(b.c, b.r, b.c, b.r + 1);
+        b.r++;
+        if (!canFallInto(b.c, b.r + 1, b)) {
+          b.y = b.r;
+          landBag(b, i);
+        }
+      }
+    }
+  }
+}
+
+function startFall(b) {
+  b.state = 'fall';
+  b.fallFrom = b.r;
+  b.crush = 0;
+  cellDug[b.r][b.c] = true;
+  // Kettenbonus: mehrere Säcke kurz hintereinander zum Fallen gebracht
+  if (gameTime - lastFallTime < 3) fallChain++;
+  else fallChain = 1;
+  lastFallTime = gameTime;
+  if (fallChain >= 2) {
+    const bonus = 100 * fallChain;
+    addScore(bonus);
+    floatText(b.c, b.r - 0.4, 'KETTE x' + fallChain + ' +' + bonus, '#FF55FF');
+  }
+}
+
+function landBag(b, idx) {
+  const dist = b.r - b.fallFrom;
+  if (dist >= 2) {
+    // Sack platzt und gibt Gold frei
+    bags.splice(idx, 1);
+    golds.push({ c: b.c, r: b.r, t: 0 });
+    SFX.breakBag();
+  } else {
+    b.state = 'rest';
+    SFX.thud();
+  }
+}
+
+function crushCheck(b) {
+  const d = digger;
+  if (!d.dead && Math.abs(d.x - b.c) < 0.65 && d.y - b.y > 0 && d.y - b.y < 0.85) {
+    killDigger();
+    return;
+  }
+  for (const m of monsters) {
+    if (m.spawnT > 0 || m.hitBags.has(b)) continue;
+    if (Math.abs(m.x - b.c) < 0.65 && m.y - b.y > -0.1 && m.y - b.y < 0.85) {
+      m.hitBags.add(b);
+      if (m.type === 'nobbin') {
+        // Nobbin wird vom Sack getroffen -> wütender Hobbin
+        m.type = 'hobbin';
+        m.flash = 0.5;
+        SFX.transform();
+        floatText(m.x, m.y - 0.5, 'HOBBIN!', '#FF5555');
+      } else {
+        killMonster(m, 250 * Math.pow(2, b.crush));
+        b.crush++;
+      }
+    }
+  }
+}
+
+function updateGold(dt) {
+  for (let i = golds.length - 1; i >= 0; i--) {
+    golds[i].t += dt;
+    if (golds[i].t > GOLD_LIFETIME) golds.splice(i, 1);
+  }
+}
+
+// ============================================================
+//  MONSTER (Nobbins & Hobbins)
+// ============================================================
+function computeDistMap() {
+  distMap = grid(Infinity);
+  const d = digger;
+  const sc = Math.round(d.x), sr = Math.round(d.y);
+  if (!inBounds(sc, sr)) return;
+  const q = [[sc, sr]];
+  distMap[sr][sc] = 0;
+  let head = 0;
+  while (head < q.length) {
+    const [c, r] = q[head++];
+    for (const dir of DIR_LIST) {
+      const nc = c + DIRS[dir].dx, nr = r + DIRS[dir].dy;
+      if (!inBounds(nc, nr) || distMap[nr][nc] !== Infinity) continue;
+      if (!cellDug[nr][nc] || !edgeDug(c, r, nc, nr) || bagAt(nc, nr)) continue;
+      distMap[nr][nc] = distMap[r][c] + 1;
+      q.push([nc, nr]);
+    }
+  }
+}
+
+function spawnMonster() {
+  monsters.push({
+    type: 'nobbin', fx: SPAWN.c, fy: SPAWN.r, tx: SPAWN.c, ty: SPAWN.r, p: 0,
+    x: SPAWN.c, y: SPAWN.r, moving: null, last: null, face: 'left',
+    spawnT: 0.8, anim: Math.random(), flash: 0, hitBags: new Set(),
+  });
+  monstersSpawned++;
+}
+
+function chooseDir(m) {
+  const opts = DIR_LIST.filter(dir => passable(m.fx, m.fy, m.fx + DIRS[dir].dx, m.fy + DIRS[dir].dy));
+  if (!opts.length) return null;
+  const forward = opts.filter(o => o !== OPP[m.last]);
+  const pool = forward.length ? forward : opts;
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  const distOf = dir => distMap[m.fy + DIRS[dir].dy][m.fx + DIRS[dir].dx];
+
+  if (bonusTimer > 0) {
+    // Bonus-Modus: Monster fliehen
+    let best = -1, cands = [];
+    for (const o of opts) {
+      const v = distOf(o) === Infinity ? 99 : distOf(o);
+      if (v > best) { best = v; cands = [o]; } else if (v === best) cands.push(o);
+    }
+    return pick(cands);
+  }
+  const randomness = m.type === 'hobbin' ? 0.05 : Math.max(0.12, 0.38 - 0.03 * level);
+  if (Math.random() < randomness) return pick(pool);
+  let best = Infinity, cands = [];
+  for (const o of opts) {
+    const v = distOf(o);
+    if (v < best) { best = v; cands = [o]; } else if (v === best && v !== Infinity) cands.push(o);
+  }
+  if (best === Infinity) return pick(pool); // Digger nicht erreichbar: umherirren
+  return pick(cands);
+}
+
+function updateMonsters(dt) {
+  // Neue Monster erscheinen am Eingang oben rechts
+  const alive = monsters.length;
+  if (bonusTimer <= 0 && monstersSpawned < monstersTotal && alive < maxOnField) {
+    spawnTimer -= dt;
+    const blocked = monsters.some(m => Math.abs(m.x - SPAWN.c) < 1 && Math.abs(m.y - SPAWN.r) < 1) ||
+      (Math.abs(digger.x - SPAWN.c) < 1.5 && Math.abs(digger.y - SPAWN.r) < 1.5) || bagAt(SPAWN.c, SPAWN.r);
+    if (spawnTimer <= 0 && !blocked) {
+      spawnMonster();
+      spawnTimer = Math.max(1.5, 4 - level * 0.25);
+    }
+  }
+
+  for (const m of monsters) {
+    m.anim += dt;
+    if (m.flash > 0) m.flash -= dt;
+    if (m.spawnT > 0) { m.spawnT -= dt; continue; }
+    let speed = m.type === 'hobbin' ? hobbinSpeed() : nobbinSpeed();
+    if (bonusTimer > 0) speed *= 0.75;
+    let dist = speed * dt;
+    let guard = 0;
+    while (dist > 0 && guard++ < 4) {
+      if (m.moving) {
+        if (bagAt(m.tx, m.ty)) {   // Sack versperrt den Weg -> umdrehen
+          [m.fx, m.fy, m.tx, m.ty] = [m.tx, m.ty, m.fx, m.fy];
+          m.p = 1 - m.p;
+          m.moving = OPP[m.moving];
+          m.last = m.moving;
+        }
+        const step = Math.min(dist, 1 - m.p);
+        m.p += step;
+        dist -= step;
+        if (m.p >= 1) { m.fx = m.tx; m.fy = m.ty; m.p = 0; m.moving = null; }
+      } else {
+        const dir = chooseDir(m);
+        if (!dir) break;
+        m.moving = dir;
+        m.last = dir;
+        m.tx = m.fx + DIRS[dir].dx;
+        m.ty = m.fy + DIRS[dir].dy;
+        if (dir === 'left' || dir === 'right') m.face = dir;
+      }
+    }
+    m.x = m.fx + (m.tx - m.fx) * m.p;
+    m.y = m.fy + (m.ty - m.fy) * m.p;
+  }
+
+  // Kollision mit dem Digger
+  for (const m of monsters.slice()) {
+    if (m.spawnT > 0 || digger.dead) continue;
+    if (Math.hypot(m.x - digger.x, m.y - digger.y) < 0.7) {
+      if (bonusTimer > 0) {
+        killMonster(m, 200 * Math.pow(2, bonusEaten));
+        bonusEaten++;
+        SFX.eat();
+      } else {
+        killDigger();
+        return;
+      }
+    }
+  }
+}
+
+function killMonster(m, points) {
+  const i = monsters.indexOf(m);
+  if (i < 0) return;
+  monsters.splice(i, 1);
+  monstersKilled++;
+  addScore(points);
+  explosion(m.x, m.y, m.type === 'hobbin' ? '#FF5555' : '#FF55FF');
+  floatText(m.x, m.y - 0.3, String(points), '#FFFFFF');
+  SFX.kill();
+}
+
+// ============================================================
+//  BONUS-KIRSCHE
+// ============================================================
+function updateBonus(dt) {
+  if (bonusTimer > 0) {
+    bonusTimer -= dt;
+    if (bonusTimer <= 0) { bonusTimer = 0; stopMusic(); }
+  }
+  if (cherry) {
+    cherry.t += dt;
+    if (cherry.t > 12) { cherry = null; cherryTimer = 25; }
+  } else if (bonusTimer <= 0 && cherriesThisLevel < 2) {
+    cherryTimer -= dt;
+    if (cherryTimer <= 0 && !bagAt(SPAWN.c, SPAWN.r)) {
+      cherry = { c: SPAWN.c, r: SPAWN.r, t: 0 };
+      cherriesThisLevel++;
+      SFX.cherryAppear();
+    }
+  }
+}
+
+// ============================================================
+//  UPDATE
+// ============================================================
+function update(dt) {
+  gameTime += dt;
+  stateTime += dt;
+  if (flashTime > 0) flashTime -= dt;
+
+  for (let i = effects.length - 1; i >= 0; i--) {
+    effects[i].t += dt;
+    if (effects[i].t > effects[i].dur) effects.splice(i, 1);
+  }
+  for (let i = texts.length - 1; i >= 0; i--) {
+    texts[i].t += dt;
+    texts[i].y -= dt * 0.8;
+    if (texts[i].t > 1.3) texts.splice(i, 1);
+  }
+
+  if (state === 'play') {
+    updateDigger(dt);
+    if (state !== 'play') return;
+    computeDistMap();
+    updatePea(dt);
+    updateBags(dt);
+    if (state !== 'play') return;
+    updateGold(dt);
+    updateMonsters(dt);
+    if (state !== 'play') return;
+    updateBonus(dt);
+    if (emeraldsLeft <= 0 || monstersKilled >= monstersTotal) {
+      stopMusic();
+      SFX.levelClear();
+      setState('levelclear');
+    }
+  } else if (state === 'dying') {
+    if (stateTime > 3.6) {
+      lives--;
+      if (lives <= 0) {
+        if (newHi) { try { localStorage.setItem('digger-highscore', String(hiScore)); } catch (e) { /* ignorieren */ } }
+        setState('gameover');
+      } else {
+        // Monster auf dem Feld kehren in die Warteschlange zurück
+        monstersSpawned -= monsters.length;
+        monsters = [];
+        cherry = null;
+        cherryTimer = Math.max(cherryTimer, 10);
+        spawnTimer = 2.5;
+        for (const b of bags) {
+          if (b.state === 'fall') { b.y = b.r; b.state = 'rest'; }
+          else if (b.state === 'push') { b.x = Math.round(b.x); b.c = b.x; b.state = 'rest'; }
+        }
+        resetDigger();
+        setState('play');
+      }
+    }
+  } else if (state === 'levelclear') {
+    if (stateTime > 2.8) {
+      level++;
+      loadLevel();
+      setState('play');
+    }
+  }
+}
+
+// ============================================================
+//  RENDERING
+// ============================================================
+function px(c) { return c * CELL + CELL / 2; }
+
+function drawField() {
+  ctx.drawImage(dirtCanvas, 0, 0, W, FIELD_H);
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (emeralds[r][c]) drawSprite(SPR.emerald, px(c), px(r) + 2);
+    }
+  }
+  for (const g of golds) {
+    if (g.t > GOLD_LIFETIME - 3 && Math.floor(g.t * 8) % 2) continue;
+    drawSprite(SPR.gold, px(g.c), px(g.r));
+  }
+  for (const b of bags) {
+    const wob = b.state === 'wobble' ? Math.sin(gameTime * 45) * 2.5 : 0;
+    drawSprite(SPR.bag, px(b.x) + wob, px(b.y));
+  }
+  if (cherry && !(cherry.t > 9 && Math.floor(cherry.t * 8) % 2)) {
+    drawSprite(SPR.cherry, px(cherry.c), px(cherry.r) + Math.sin(gameTime * 5) * 2);
+  }
+  for (const m of monsters) {
+    if (m.spawnT > 0 && Math.floor(m.spawnT * 12) % 2) continue;
+    const frame = Math.floor(m.anim * 6) % 2 ? '2' : '1';
+    let key = m.type + frame;
+    if (m.flash > 0 && Math.floor(m.flash * 16) % 2) key += 'White';
+    else if (bonusTimer > 0) key += (bonusTimer < 2 && Math.floor(bonusTimer * 8) % 2) ? 'White' : 'Blue';
+    drawSprite(SPR[key], px(m.x), px(m.y), { flip: m.type === 'hobbin' && m.face === 'left' });
+  }
+  drawDigger();
+  if (pea) {
+    const x = px(pea.x), y = px(pea.y);
+    ctx.fillStyle = '#55FF55';
+    ctx.fillRect(x - 4, y - 4, 8, 8);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x - 2, y - 2, 4, 4);
+  }
+  for (const e of effects) {
+    const k = e.t / e.dur;
+    ctx.fillStyle = e.col;
+    for (const p of e.parts) {
+      const r = p.v * k * 10;
+      const s = Math.max(1, 6 * (1 - k));
+      ctx.fillRect(px(e.x) + Math.cos(p.a) * r - s / 2, px(e.y) + Math.sin(p.a) * r - s / 2, s, s);
+    }
+  }
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 14px "Courier New", monospace';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, 1 - t.t / 1.3);
+    ctx.fillStyle = '#000';
+    ctx.fillText(t.txt, px(t.x) + 1, px(t.y) + 1);
+    ctx.fillStyle = t.col;
+    ctx.fillText(t.txt, px(t.x), px(t.y));
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDigger() {
+  const d = digger;
+  const x = px(d.x), y = px(d.y);
+  if (d.dead) {
+    if (state === 'dying' && stateTime < 1.2) {
+      const hop = Math.abs(Math.sin(stateTime * 8)) * 6;
+      drawSprite(SPR.digger1, x, y - hop, { rot: Math.PI });
+    } else {
+      const rise = Math.min(1, (stateTime - 1.2) / 0.6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x - 20, y - 20, 40, 40);
+      ctx.clip();
+      drawSprite(SPR.grave, x, y + (1 - rise) * 36);
+      ctx.restore();
+    }
+    return;
+  }
+  const spr = Math.floor(d.anim * 10) % 2 ? SPR.digger2 : SPR.digger1;
+  const o = {};
+  if (d.face === 'left') o.flip = true;
+  else if (d.face === 'up') o.rot = -Math.PI / 2;
+  else if (d.face === 'down') o.rot = Math.PI / 2;
+  drawSprite(spr, x, y, o);
+}
+
+function pad(n, len) { return String(n).padStart(len, '0'); }
+
+function drawHUD() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, HUD);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(0, HUD - 2, W, 2);
+
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(pad(score, 6), 10, HUD / 2);
+
+  for (let i = 0; i < lives; i++) drawSprite(SPR.digger1, 122 + i * 28, HUD / 2, { scale: 2 });
+
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 18px "Courier New", monospace';
+  ctx.fillStyle = '#55FFFF';
+  ctx.fillText('LEVEL ' + level, 338, HUD / 2);
+
+  // Erbse bereit?
+  const ready = !pea && peaCooldown <= 0;
+  ctx.fillStyle = ready ? '#55FF55' : '#333';
+  ctx.fillRect(400, HUD / 2 - 5, 10, 10);
+
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillStyle = '#FFFF55';
+  ctx.fillText('HI ' + pad(hiScore, 6), W - 10, HUD / 2);
+
+  if (bonusTimer > 0) {
+    ctx.fillStyle = Math.floor(gameTime * 6) % 2 ? '#FF5555' : '#FFFFFF';
+    ctx.fillRect(0, HUD - 4, W * (bonusTimer / bonusDuration), 4);
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
+function overlayPanel(alpha = 0.78) {
+  ctx.fillStyle = 'rgba(0,0,0,' + alpha + ')';
+  ctx.fillRect(0, HUD, W, FIELD_H);
+}
+
+function shadowText(txt, x, y, col, font) {
+  ctx.font = font;
+  ctx.fillStyle = '#000';
+  ctx.fillText(txt, x + 3, y + 3);
+  ctx.fillStyle = col;
+  ctx.fillText(txt, x, y);
+}
+
+function drawTitle() {
+  overlayPanel(0.85);
+  ctx.textAlign = 'center';
+  // Titel mit CGA-Farbwechsel
+  const cols = ['#FFFF55', '#55FF55', '#55FFFF', '#FF55FF'];
+  const title = 'DIGGER';
+  ctx.font = 'bold 64px "Courier New", monospace';
+  const tw = ctx.measureText(title).width;
+  let x = W / 2 - tw / 2;
+  ctx.textAlign = 'left';
+  for (let i = 0; i < title.length; i++) {
+    const ch = title[i];
+    const col = cols[(i + Math.floor(gameTime * 4)) % cols.length];
+    shadowText(ch, x, HUD + 82, col, 'bold 64px "Courier New", monospace');
+    x += ctx.measureText(ch).width;
+  }
+  ctx.textAlign = 'center';
+  ctx.font = '13px "Courier New", monospace';
+  ctx.fillStyle = '#AAAAAA';
+  ctx.fillText('nach dem Original von Windmill Software (1983)', W / 2, HUD + 106);
+
+  // Figuren-Legende wie auf dem Original-Titelbild
+  const legend = [
+    [SPR.digger1, 'DIGGER', 'Das bist du', '#55FF55'],
+    [SPR.nobbin1, 'NOBBIN', 'langsam', '#FF55FF'],
+    [SPR.hobbin1, 'HOBBIN', 'schnell & wütend', '#FF5555'],
+    [SPR.emerald, 'SMARAGD', '25 Punkte', '#55FFFF'],
+    [SPR.gold, 'GOLD', '500 Punkte', '#FFFF55'],
+    [SPR.cherry, 'BONUS', 'Monster fressen!', '#FF5555'],
+  ];
+  const colW = W / 3;
+  legend.forEach(([spr, name, desc, col], i) => {
+    const cx = colW * (i % 3) + colW / 2;
+    const cy = HUD + 150 + Math.floor(i / 3) * 76;
+    const bob = (i === Math.floor(gameTime * 1.5) % 6) ? -3 : 0;
+    drawSprite(spr, cx, cy + bob);
+    ctx.font = 'bold 15px "Courier New", monospace';
+    ctx.fillStyle = col;
+    ctx.fillText(name, cx, cy + 32);
+    ctx.font = '12px "Courier New", monospace';
+    ctx.fillStyle = '#AAAAAA';
+    ctx.fillText(desc, cx, cy + 46);
+  });
+
+  ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText('PFEILTASTEN: Graben   LEERTASTE: Feuern   P: Pause   M: Ton', W / 2, HUD + 318);
+  ctx.fillStyle = '#AAAAAA';
+  ctx.font = '12px "Courier New", monospace';
+  ctx.fillText('Säcke untergraben lässt sie fallen – auf Monster, aber auch auf dich!', W / 2, HUD + 338);
+
+  if (Math.floor(gameTime * 2) % 2 === 0) {
+    shadowText('LEERTASTE ODER ENTER ZUM STARTEN', W / 2, HUD + 374, '#FFFF55', 'bold 18px "Courier New", monospace');
+  }
+}
+
+function render() {
+  ctx.setTransform(SC, 0, 0, SC, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(0, HUD);
+  ctx.fillStyle = bonusTimer > 0 ? '#000022' : '#000';
+  ctx.fillRect(0, 0, W, FIELD_H);
+  drawField();
+  ctx.restore();
+  drawHUD();
+
+  if (flashTime > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + (flashTime / 0.25) * 0.8 + ')';
+    ctx.fillRect(0, HUD, W, FIELD_H);
+  }
+
+  ctx.textAlign = 'center';
+  if (state === 'title') {
+    drawTitle();
+  } else if (state === 'levelclear') {
+    overlayPanel(0.5);
+    shadowText('LEVEL ' + level + ' GESCHAFFT!', W / 2, HUD + FIELD_H / 2 - 10, '#55FF55', 'bold 36px "Courier New", monospace');
+    shadowText('Weiter mit Level ' + (level + 1) + ' ...', W / 2, HUD + FIELD_H / 2 + 30, '#FFFFFF', 'bold 16px "Courier New", monospace');
+  } else if (state === 'gameover') {
+    overlayPanel(0.8);
+    shadowText('GAME OVER', W / 2, HUD + 140, '#FF5555', 'bold 56px "Courier New", monospace');
+    shadowText('PUNKTE: ' + pad(score, 6), W / 2, HUD + 195, '#FFFFFF', 'bold 22px "Courier New", monospace');
+    shadowText('LEVEL ' + level, W / 2, HUD + 225, '#55FFFF', 'bold 18px "Courier New", monospace');
+    if (newHi) shadowText('NEUER HIGHSCORE!', W / 2, HUD + 262, '#FFFF55', 'bold 22px "Courier New", monospace');
+    if (stateTime > 1 && Math.floor(gameTime * 2) % 2 === 0) {
+      shadowText('LEERTASTE ODER ENTER FÜR NEUSTART', W / 2, HUD + 320, '#55FF55', 'bold 18px "Courier New", monospace');
+    }
+  }
+  if (paused) {
+    overlayPanel(0.5);
+    shadowText('PAUSE', W / 2, HUD + FIELD_H / 2, '#FFFF55', 'bold 48px "Courier New", monospace');
+    shadowText('P drücken zum Weiterspielen', W / 2, HUD + FIELD_H / 2 + 36, '#FFFFFF', 'bold 16px "Courier New", monospace');
+  }
+  if (muted) {
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillStyle = '#AAAAAA';
+    ctx.fillText('TON AUS', W - 8, H - 6);
+  }
+}
+
+// ============================================================
+//  GAME-LOOP
+// ============================================================
+const STEP = 1 / 120;
+let lastT = performance.now(), acc = 0;
+function frame(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.1) dt = 0.1;
+  if (!paused) {
+    acc += dt;
+    while (acc >= STEP) { update(STEP); acc -= STEP; }
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+
+// Titelbild: Level 1 im Hintergrund zeigen
+loadLevel();
+fitCanvas();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
