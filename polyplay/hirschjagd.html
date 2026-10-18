@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Hirschjagd – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Hirschjagd</span>
+  </header>
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Hirschjagd"></canvas>
+  </div>
+  <div class="touch dpad fire-pad" id="touch" aria-hidden="true">
+    <button data-k="up" class="up">▲</button>
+    <button data-k="left" class="left">◀</button>
+    <button data-k="fire" class="mid">FEUER</button>
+    <button data-k="right" class="right">▶</button>
+    <button data-k="down" class="down">▼</button>
+  </div>
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd> Fadenkreuz bewegen &nbsp;·&nbsp; <kbd>Leertaste</kbd> Schießen / Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton</p>
+    <p>Je weiter entfernt das Wild, desto mehr Punkte. Nach 6 Schuss wird nachgeladen.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+<script src="polyplay-core.js"></script>
+<script>
+(() => {
+'use strict';
+const { W, H, PAL, ctx, txt } = PP;
+
+/* ---------- Sprites ---------- */
+const BODY = [
+  '...........BBBK.',
+  '...........BBBBB',
+  'B.BBBBBBBBBBB...',
+  '.BBBBBBBBBBBB...',
+  '..BBBBBBBBBB....',
+  '..BLLLLLLLLB....'
+];
+const LEGS = [
+  ['..B.B....B.B....', '..B.B....B.B....', '..B.B....B.B....'],
+  ['..B..B..B...B...', '.B....BB.....B..', 'B.....B.......B.']
+];
+const ANTLERS = ['...........L.L..', '..........LL.LL.', '...........LLL..', '............BB..'];
+const EARS = ['................', '................', '............B.B.', '............BB..'];
+const mk = (head, map) => LEGS.map(l => PP.pair([...head, ...BODY, ...l], map));
+const BOAR_TOP = [
+  '...DDDDDD.....',
+  '.DDDDDDDDDD.W.',
+  'DDDDDDDDDDDDD.',
+  'DDDDDDDDDDKDDD',
+  'DDDDDDDDDDDDDD',
+  '.DDDDDDDDDDDN.',
+  '..DDDDDDDDDD..'
+];
+const KINDS = {
+  hirsch: { spr: mk(ANTLERS, { B: '#8a4a1a' }), pts: 40, speed: 1, name: 'HIRSCH' },
+  reh:    { spr: mk(EARS, { B: '#c88848' }), pts: 20, speed: 1.15, name: 'REH' },
+  keiler: { spr: [['..D.D...D.D...', '..D.D...D.D...'], ['.D...D.D...D..', 'D....D.D....D.']].map(l => PP.pair([...BOAR_TOP, ...l], { D: '#7a6050', N: '#e0a0a0' })),
+            pts: 60, speed: 1.6, name: 'KEILER' }
+};
+
+// Ebenen: Fußlinie, Maßstab, Grundtempo, Punkte-Faktor
+const LANES = [
+  { foot: 112, s: 1, v: 30, m: 3 },
+  { foot: 154, s: 2, v: 48, m: 2 },
+  { foot: 202, s: 2, v: 66, m: 1 }
+];
+
+/* ---------- Hintergrund ---------- */
+const BG = document.createElement('canvas');
+BG.width = W; BG.height = H;
+(() => {
+  const b = BG.getContext('2d');
+  const sky = ['#101848', '#182a6a', '#28408a', '#5a4a8a', '#a0507a', '#e07050', '#f0a040'];
+  sky.forEach((c, i) => { b.fillStyle = c; b.fillRect(0, 12 + i * 10, W, 10); });
+  b.fillStyle = '#ffe080'; b.beginPath(); b.arc(250, 78, 12, 0, Math.PI * 2); b.fill();
+  // Berge
+  b.fillStyle = '#3a2a5a';
+  b.beginPath(); b.moveTo(0, 90);
+  [[40, 60], [80, 80], [130, 52], [180, 84], [230, 62], [280, 86], [320, 66], [320, 100], [0, 100]].forEach(([x, y]) => b.lineTo(x, y));
+  b.fill();
+  // Waldrand
+  b.fillStyle = '#0c2a14';
+  b.fillRect(0, 92, W, 10);
+  for (let x = -4; x < W; x += 9) {
+    const h = 14 + ((x * 37) % 11);
+    b.beginPath(); b.moveTo(x, 96); b.lineTo(x + 5, 96 - h); b.lineTo(x + 10, 96); b.fill();
+  }
+  // Wiese in Streifen
+  const g = ['#1a4a1a', '#1e541e', '#225e22', '#266826', '#2a722a'];
+  for (let y = 100, i = 0; y < 222; y += 25, i++) { b.fillStyle = g[Math.min(i, g.length - 1)]; b.fillRect(0, y, W, 25); }
+  // Grasbüschel
+  b.fillStyle = '#3c8c3c';
+  for (let i = 0; i < 90; i++) {
+    const x = (i * 71) % W, y = 104 + ((i * 53) % 116);
+    b.fillRect(x, y, 1, 2); b.fillRect(x + 2, y - 1, 1, 3);
+  }
+  // Büsche vorne
+  b.fillStyle = '#0f3a10';
+  for (let x = -10; x < W; x += 34) { b.beginPath(); b.arc(x + 14, 222, 14, Math.PI, 0); b.fill(); }
+  b.fillStyle = '#2a1a0c'; b.fillRect(0, 222, W, 18);
+})();
+
+/* ---------- Ton ---------- */
+const sfx = {
+  shot:   () => { PP.noise(0.25, 0.25); PP.tone(180, 40, 0.2, 'sawtooth', 0.08); },
+  hit:    () => PP.melody([660, 880], 0.07, 'square', 0.09),
+  empty:  () => PP.tone(300, 300, 0.04, 'square', 0.06),
+  reload: () => { PP.tone(500, 500, 0.04, 'square', 0.06); PP.tone(700, 700, 0.05, 'square', 0.06, 0.15); }
+};
+
+/* ---------- Zustand ---------- */
+let animals = [], cross, ammo, reloadT, flash, popups, spawnT, shots, hits;
+
+function spawn(attract) {
+  const lane = Math.floor(Math.random() * 3);
+  const r = Math.random();
+  const kind = r < 0.12 ? 'keiler' : r < 0.55 ? 'hirsch' : 'reh';
+  const k = KINDS[kind], L = LANES[lane];
+  const dir = Math.random() < 0.5 ? 1 : -1;
+  const w = k.spr[0].w * L.s;
+  animals.push({
+    kind, lane, dir, x: dir > 0 ? -w : W, w, h: k.spr[0].h * L.s,
+    v: L.v * k.speed * PP.rand(0.85, 1.25) * (attract ? 0.8 : 1),
+    state: 'run', t: 0, anim: Math.random(), graze: 0, jump: -1
+  });
+  animals.sort((a, b) => a.lane - b.lane);
+}
+
+function reset() {
+  animals = []; popups = [];
+  cross = { x: W / 2, y: 130 };
+  ammo = 6; reloadT = 0; flash = 0; spawnT = 0; shots = 0; hits = 0;
+}
+reset();
+
+function updateAnimals(dt, attract) {
+  spawnT -= dt;
+  if (spawnT <= 0 && animals.length < (attract ? 4 : 7)) { spawn(attract); spawnT = PP.rand(0.6, 1.6); }
+  for (const a of animals) {
+    a.t += dt;
+    if (a.state === 'fall') continue;
+    if (a.graze > 0) { a.graze -= dt; continue; }
+    a.x += a.dir * a.v * dt;
+    a.anim += dt * a.v / 18;
+    if (a.jump >= 0) { a.jump += dt; if (a.jump > 0.5) a.jump = -1; }
+    else if (Math.random() < dt * 0.25) a.jump = 0;
+    if (a.kind !== 'keiler' && a.x > 10 && a.x < W - a.w - 10 && Math.random() < dt * 0.12) a.graze = PP.rand(0.8, 2);
+  }
+  animals = animals.filter(a => (a.state !== 'fall' || a.t < 0.9) && a.x > -a.w - 4 && a.x < W + 4);
+}
+
+function animalY(a) {
+  const L = LANES[a.lane];
+  const hop = a.jump >= 0 ? Math.sin(a.jump / 0.5 * Math.PI) * 10 * L.s : 0;
+  return L.foot - a.h - hop;
+}
+
+function shoot(g) {
+  if (reloadT > 0) return;
+  if (ammo <= 0) { sfx.empty(); return; }
+  ammo--; shots++; flash = 0.06; sfx.shot();
+  // vorderste Ebene zuerst
+  for (let i = animals.length - 1; i >= 0; i--) {
+    const a = animals[i];
+    if (a.state === 'fall') continue;
+    const y = animalY(a);
+    if (cross.x >= a.x + 1 && cross.x <= a.x + a.w - 1 && cross.y >= y + 1 && cross.y <= y + a.h) {
+      const pts = KINDS[a.kind].pts * LANES[a.lane].m;
+      g.score += pts; hits++;
+      a.state = 'fall'; a.t = 0;
+      popups.push({ x: a.x + a.w / 2, y, s: String(pts), t: 0 });
+      sfx.hit();
+      break;
+    }
+  }
+  if (ammo === 0) { reloadT = 1.3; }
+}
+
+/* ---------- Spiel ---------- */
+PP.arcade({
+  recordKey: 'polyplay-hirschjagd-rekord',
+  time: 90,
+  reset,
+  attractReset: reset,
+  attractUpdate: dt => updateAnimals(dt, true),
+  update(dt, g) {
+    const v = 175, K = PP.keys;
+    if (K.left) cross.x -= v * dt;
+    if (K.right) cross.x += v * dt;
+    if (K.up) cross.y -= v * dt;
+    if (K.down) cross.y += v * dt;
+    cross.x = PP.clamp(cross.x, 4, W - 4);
+    cross.y = PP.clamp(cross.y, 20, 218);
+    if (PP.pressed('fire')) shoot(g);
+    if (reloadT > 0) { reloadT -= dt; if (reloadT <= 0) { ammo = 6; sfx.reload(); } }
+    flash = Math.max(0, flash - dt);
+    updateAnimals(dt, false);
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1);
+  },
+  overUpdate: dt => updateAnimals(dt, true),
+  draw(g) {
+    drawScene();
+    if (g.state === 'play') {
+      drawCross();
+      for (const p of popups) txt(p.s, p.x, p.y - p.t * 14, '#fff', 8, 'center');
+      // Patronen
+      if (reloadT > 0) { if (PP.blinkOn(0.4)) txt('NACHLADEN', 4, 228, PAL.Y); }
+      else for (let i = 0; i < ammo; i++) { ctx.fillStyle = PAL.Y; ctx.fillRect(6 + i * 7, 228, 3, 8); ctx.fillStyle = PAL.O; ctx.fillRect(6 + i * 7, 233, 3, 3); }
+      txt('TREFFER ' + hits, W - 4, 228, PAL.g, 8, 'right');
+      if (flash > 0) { ctx.fillStyle = 'rgba(255,255,220,0.35)'; ctx.fillRect(0, 12, W, 210); }
+    }
+  },
+  attract() {
+    drawScene();
+    PP.dim(0.55, 12, 210);
+    txt('HIRSCHJAGD', W / 2, 24, PAL.Y, 16, 'center');
+    const rows = [['hirsch', 40], ['reh', 20], ['keiler', 60]];
+    rows.forEach(([k, p], i) => {
+      const s = KINDS[k].spr[0].r, y = 56 + i * 26;
+      PP.draw(s, 70 - s.width, y, 2);
+      txt(KINDS[k].name, 110, y + 6, '#fff');
+      txt(p + ' PKT', 200, y + 6, PAL.Y);
+    });
+    txt('FERN X3   MITTE X2   NAH X1', W / 2, 142, PAL.C, 8, 'center');
+    txt('6 SCHUSS - DANN NACHLADEN', W / 2, 162, PAL.g, 8, 'center');
+    txt('90 SEKUNDEN JAGDZEIT', W / 2, 180, PAL.g, 8, 'center');
+  },
+  overLines: () => [
+    ['SCHUESSE ' + PP.pad(shots, 3)],
+    ['TREFFER  ' + PP.pad(hits, 3)],
+    ['QUOTE    ' + String(shots ? Math.round(hits / shots * 100) : 0).padStart(3, ' ') + '%']
+  ]
+});
+
+function drawScene() {
+  ctx.drawImage(BG, 0, 0);
+  for (const a of animals) {
+    const k = KINDS[a.kind], L = LANES[a.lane];
+    const frame = a.graze > 0 ? k.spr[0] : k.spr[Math.floor(a.anim) % 2];
+    const img = a.dir > 0 ? frame.r : frame.l;
+    const x = Math.round(a.x), y = Math.round(animalY(a));
+    if (a.state === 'fall') {
+      if (a.t > 0.5 && PP.blinkOn(0.12, 0.5)) continue;
+      ctx.save(); ctx.translate(x + a.w / 2, L.foot); ctx.scale(1, -1);
+      ctx.drawImage(img, -a.w / 2, 0, a.w, a.h); ctx.restore();
+    } else {
+      ctx.drawImage(img, x, y, a.w, a.h);
+    }
+  }
+  // Büsche vorne verdecken die Hufe der nahen Tiere
+  ctx.drawImage(BG, 0, 206, W, 34, 0, 206, W, 34);
+}
+
+function drawCross() {
+  const x = Math.round(cross.x), y = Math.round(cross.y);
+  ctx.fillStyle = reloadT > 0 ? '#888' : PAL.R;
+  ctx.fillRect(x - 8, y, 5, 1); ctx.fillRect(x + 4, y, 5, 1);
+  ctx.fillRect(x, y - 8, 1, 5); ctx.fillRect(x, y + 4, 1, 5);
+  for (let i = 0; i < 24; i++) {
+    const a = i / 24 * Math.PI * 2;
+    ctx.fillRect(Math.round(x + Math.cos(a) * 6), Math.round(y + Math.sin(a) * 6), 1, 1);
+  }
+  ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 1, 1);
+}
+})();
+</script>
+</body>
+</html>

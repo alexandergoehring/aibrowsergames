@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Autorennen – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Autorennen</span>
+  </header>
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Autorennen"></canvas>
+  </div>
+  <div class="touch dpad" id="touch" aria-hidden="true">
+    <button data-k="up" class="up">GAS</button>
+    <button data-k="left" class="left">◀</button>
+    <button data-k="fire" class="mid">START</button>
+    <button data-k="right" class="right">▶</button>
+    <button data-k="down" class="down">BREMSE</button>
+  </div>
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>→</kbd> Lenken &nbsp;·&nbsp; <kbd>↑</kbd> Gas &nbsp;·&nbsp; <kbd>↓</kbd> Bremse &nbsp;·&nbsp; <kbd>Leertaste</kbd> Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton</p>
+    <p>Jeder gefahrene Meter zählt. Auf der Wiese und im Öl verlierst du Tempo, ein Unfall kostet wertvolle Sekunden.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+<script src="polyplay-core.js"></script>
+<script>
+(() => {
+'use strict';
+const { W, H, PAL, ctx, txt } = PP;
+const TOP = 12, BOTTOM = 222, HALF = 62, LANE = 40;
+const CAR_Y = 168, MAX_V = 280, CRUISE = 150;
+
+/* ---------- Sprites ---------- */
+const CAR = [
+  '..RRRRRR..',
+  '.RRRRRRRR.',
+  'KRRCCCCRRK',
+  'KRCCCCCCRK',
+  'KRRRRRRRRK',
+  '.RRRRRRRR.',
+  '.RRWRRWRR.',
+  '.RRWRRWRR.',
+  '.RRRRRRRR.',
+  '.RRRRRRRR.',
+  'KRRCCCCRRK',
+  'KRRRRRRRRK',
+  'KRRRRRRRRK',
+  '.RRRRRRRR.',
+  '.RYRRRRYR.',
+  '..RRRRRR..'
+];
+const PLAYER = PP.makeSprite(CAR, { R: '#ff3030', K: '#111' });
+const TRAFFIC = ['#ffe000', '#2850ff', '#20c020', '#e040ff', '#f0f0f0'].map(c => PP.makeSprite(CAR, { R: c, K: '#111', C: '#203040' }));
+const TREE = PP.makeSprite([
+  '...GG...',
+  '..GGGG..',
+  '.GGgGGG.',
+  'GGGGGgGG',
+  '.GgGGGG.',
+  'GGGGGGGG',
+  '.GGGGgG.',
+  '...BB...',
+  '...BB...'
+], { G: '#0c5a0c', g: '#2a9a2a' });
+
+/* ---------- Strecke ---------- */
+const roadX = wy => 160 + 46 * Math.sin(wy / 260) + 18 * Math.sin(wy / 97);
+const hash = n => { n = Math.sin(n * 127.1) * 43758.5453; return n - Math.floor(n); };
+
+/* ---------- Ton ---------- */
+let engineOsc = null, engineGain = null;
+function engine(v, on) {
+  if (!on) { if (engineGain) engineGain.gain.value = 0; return; }
+  // dauerhafter Motorton, Tonhöhe folgt dem Tempo
+  try {
+    if (!engineOsc) {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      engineOsc = ac.createOscillator(); engineGain = ac.createGain();
+      engineOsc.type = 'sawtooth'; engineGain.gain.value = 0;
+      engineOsc.connect(engineGain).connect(ac.destination); engineOsc.start();
+      engine.ac = ac;
+    }
+    if (engine.ac.state === 'suspended') engine.ac.resume();
+    engineOsc.frequency.value = 40 + v * 0.45;
+    engineGain.gain.value = muteEngine ? 0 : 0.025;
+  } catch (e) { /* ohne Ton */ }
+}
+let muteEngine = false;
+addEventListener('keydown', e => { if (e.code === 'KeyM') muteEngine = !muteEngine; });
+const sfx = {
+  crash: () => { PP.noise(0.8, 0.3); PP.tone(200, 30, 0.8, 'sawtooth', 0.1); },
+  skid:  () => PP.noise(0.5, 0.12),
+  pass:  () => PP.tone(1200, 1500, 0.05, 'square', 0.05)
+};
+
+/* ---------- Zustand ---------- */
+let dist, car, traffic, oil, spawnT, oilT, crashes, passed, popups;
+
+function reset() {
+  dist = 0;
+  car = { x: roadX(H - CAR_Y) - 10, v: 0, crash: 0, spin: 0, drift: 0 };
+  traffic = []; oil = []; popups = [];
+  spawnT = 1.5; oilT = 6; crashes = 0; passed = 0;
+}
+reset();
+
+const worldY = y => dist + (H - y);
+
+function spawnCar() {
+  const lane = Math.floor(Math.random() * 3) - 1;
+  traffic.push({ lane, off: lane * LANE, y: -36, v: PP.rand(70, 150), img: PP.pick(TRAFFIC), swap: PP.rand(2, 6) });
+}
+
+function moveWorld(dt, v) {
+  dist += v * dt;
+  for (const t of traffic) {
+    t.y += (v - t.v) * dt;
+    t.swap -= dt;
+    if (t.swap <= 0) {          // Spurwechsel
+      t.lane = PP.clamp(t.lane + PP.pick([-1, 1]), -1, 1);
+      t.swap = PP.rand(3, 7);
+    }
+    t.off += PP.clamp(t.lane * LANE - t.off, -30 * dt, 30 * dt);
+  }
+  for (const o of oil) o.y += v * dt;
+}
+
+PP.arcade({
+  recordKey: 'polyplay-autorennen-rekord',
+  time: 90,
+  reset,
+  attractReset: reset,
+  attractUpdate(dt) {
+    car.v = 120; moveWorld(dt, 120);
+    car.x += (roadX(worldY(CAR_Y + 16)) - 10 - car.x) * dt * 3;
+    spawnT -= dt; if (spawnT <= 0) { spawnCar(); spawnT = 2.5; }
+    traffic = traffic.filter(t => t.y < H + 40 && t.y > -60);
+    traffic.forEach(t => { if (Math.abs(t.off) < 20 && t.y > 120) t.lane = 1; });
+  },
+  update(dt, g) {
+    const K = PP.keys;
+    if (car.crash > 0) {
+      car.crash -= dt; car.v = 0;
+      if (car.crash <= 0) car.x = roadX(worldY(CAR_Y + 16)) - 10;
+    } else {
+      // Tempo
+      const target = K.up ? MAX_V : K.down ? 40 : CRUISE;
+      const acc = target > car.v ? 110 : 200;
+      car.v += PP.clamp(target - car.v, -acc * dt, acc * dt);
+      // Lenken
+      const steer = 125 * (0.55 + car.v / MAX_V * 0.45);
+      if (car.spin > 0) { car.spin -= dt; car.x += car.drift * dt; car.v = Math.max(60, car.v - 120 * dt); }
+      else {
+        if (K.left) car.x -= steer * dt;
+        if (K.right) car.x += steer * dt;
+      }
+      car.x = PP.clamp(car.x, 2, W - 22);
+      // Wiese bremst
+      const cx = roadX(worldY(CAR_Y + 16));
+      car.off = Math.abs(car.x + 10 - cx) > HALF - 6;
+      if (car.off) car.v = Math.max(55, car.v - 220 * dt);
+    }
+    moveWorld(dt, car.v);
+    g.score = Math.floor(dist / 10);
+
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnCar(); spawnT = Math.max(0.7, PP.rand(1.0, 2.2) - dist / 40000); }
+    oilT -= dt;
+    if (oilT <= 0) { oil.push({ y: -20, off: PP.rand(-HALF + 14, HALF - 14) }); oilT = PP.rand(5, 9); }
+
+    if (car.crash <= 0) {
+      for (const t of traffic) {
+        const tx = roadX(worldY(t.y + 16)) + t.off - 10;
+        if (Math.abs(tx - car.x) < 18 && Math.abs(t.y - CAR_Y) < 30) {
+          car.crash = 1.6; crashes++; sfx.crash();
+          t.dead = true;
+          popups.push({ x: car.x + 10, y: CAR_Y - 10, s: 'UNFALL!', c: PAL.R, t: 0 });
+          break;
+        }
+      }
+      for (const o of oil) {
+        const ox = roadX(worldY(o.y + 6)) + o.off;
+        if (!o.hit && car.spin <= 0 && Math.abs(ox - (car.x + 10)) < 16 && Math.abs(o.y + 6 - (CAR_Y + 16)) < 18) {
+          o.hit = true; car.spin = 0.9; car.drift = PP.pick([-1, 1]) * 90; sfx.skid();
+          popups.push({ x: car.x + 10, y: CAR_Y - 10, s: 'OEL!', c: PAL.Y, t: 0 });
+        }
+      }
+    }
+    traffic = traffic.filter(t => {
+      if (t.dead) return false;
+      if (t.y > H + 40) { passed++; sfx.pass(); return false; }
+      return t.y > -80;
+    });
+    oil = oil.filter(o => o.y < H + 20);
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1.2);
+    engine(car.v, g.state === 'play');
+  },
+  overUpdate() { engine(0, false); },
+  draw(g) {
+    if (PP.paused || g.state !== 'play') engine(0, false);
+    drawRoad();
+    if (g.state === 'play') {
+      if (car.crash > 0) drawExplosion();
+      else {
+        ctx.save();
+        if (car.spin > 0) { ctx.translate(car.x + 10, CAR_Y + 16); ctx.rotate(car.spin * 12); ctx.translate(-car.x - 10, -CAR_Y - 16); }
+        const shake = car.off ? (Math.random() * 2 - 1) : 0;
+        PP.draw(PLAYER, car.x + shake, CAR_Y, 2);
+        ctx.restore();
+      }
+      for (const p of popups) txt(p.s, p.x, p.y - p.t * 12, p.c, 8, 'center');
+      txt(String(Math.round(car.v * 0.6)).padStart(3, ' ') + ' KM/H', 4, 228, PAL.g);
+      txt(String(Math.floor(dist / 10)) + ' M', W - 4, 228, '#fff', 8, 'right');
+    }
+  },
+  attract() {
+    drawRoad();
+    PP.draw(PLAYER, car.x, CAR_Y, 2);
+    PP.dim(0.6, 12, 210);
+    txt('AUTORENNEN', W / 2, 28, PAL.Y, 16, 'center');
+    txt('1 PUNKT JE 10 METER', W / 2, 68, '#fff', 8, 'center');
+    PP.draw(PLAYER, 90, 92, 2); txt('DEIN WAGEN', 122, 106, PAL.R);
+    PP.draw(TRAFFIC[0], 90, 132, 2); txt('NICHT RAMMEN!', 122, 146, PAL.Y);
+    txt('GAS GEBEN BRINGT MEHR STRECKE', W / 2, 184, PAL.g, 8, 'center');
+  },
+  overLines: () => [['UNFAELLE ' + PP.pad(crashes, 3), PAL.R], ['UEBERHOLT ' + PP.pad(passed, 3)]]
+});
+
+function drawRoad() {
+  ctx.fillStyle = '#1e7a1e'; ctx.fillRect(0, TOP, W, BOTTOM - TOP);
+  for (let y = TOP; y < BOTTOM; y += 2) {
+    const wy = worldY(y), cx = Math.round(roadX(wy));
+    const band = Math.floor(wy / 12) % 2;
+    if (band) { ctx.fillStyle = '#1a6e1a'; ctx.fillRect(0, y, W, 2); }
+    ctx.fillStyle = '#3a3a3a'; ctx.fillRect(cx - HALF, y, HALF * 2, 2);
+    ctx.fillStyle = band ? PAL.R : '#fff';
+    ctx.fillRect(cx - HALF - 4, y, 4, 2); ctx.fillRect(cx + HALF, y, 4, 2);
+    if (Math.floor(wy / 16) % 2) { ctx.fillStyle = '#d0d0d0'; ctx.fillRect(cx - 21, y, 2, 2); ctx.fillRect(cx + 19, y, 2, 2); }
+  }
+  // Bäume am Rand
+  const first = Math.floor(worldY(BOTTOM + 20) / 36), last = Math.floor(worldY(TOP - 20) / 36);
+  for (let n = first; n <= last; n++) {
+    const wy = n * 36, y = H - (wy - dist), cx = roadX(wy);
+    const side = hash(n) < 0.5 ? -1 : 1;
+    const x = side < 0 ? cx - HALF - 22 - hash(n + 3) * 50 : cx + HALF + 6 + hash(n + 5) * 50;
+    if (x > -16 && x < W) PP.draw(TREE, x, y - 18, 2);
+  }
+  for (const o of oil) {
+    const x = roadX(worldY(o.y + 6)) + o.off;
+    ctx.fillStyle = '#0a0a0a';
+    ctx.beginPath(); ctx.ellipse(x, o.y + 6, 12, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#5a3a8a'; ctx.fillRect(Math.round(x - 4), Math.round(o.y + 4), 3, 1);
+  }
+  for (const t of traffic) PP.draw(t.img, roadX(worldY(t.y + 16)) + t.off - 10, t.y, 2);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, BOTTOM, W, H - BOTTOM);
+}
+
+function drawExplosion() {
+  const k = 1 - car.crash / 1.6;
+  const cx = car.x + 10, cy = CAR_Y + 16;
+  for (let i = 0; i < 40; i++) {
+    const a = hash(i) * Math.PI * 2, r = (hash(i + 9) * 0.7 + 0.3) * (6 + k * 34);
+    ctx.fillStyle = i % 3 ? PAL.O : i % 2 ? PAL.Y : PAL.R;
+    if (k < 0.8 || PP.blinkOn(0.1, 0.5)) ctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 3, 3);
+  }
+}
+})();
+</script>
+</body>
+</html>

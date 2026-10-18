@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Wasserrohrbruch – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Wasserrohrbruch</span>
+  </header>
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Wasserrohrbruch"></canvas>
+  </div>
+  <div class="touch dpad" id="touch" aria-hidden="true">
+    <button data-k="up" class="up">▲</button>
+    <button data-k="left" class="left">◀</button>
+    <button data-k="fire" class="mid">ZANGE</button>
+    <button data-k="right" class="right">▶</button>
+    <button data-k="down" class="down">▼</button>
+  </div>
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>→</kbd> Laufen &nbsp;·&nbsp; <kbd>↑</kbd> <kbd>↓</kbd> Leiter &nbsp;·&nbsp; <kbd>Leertaste</kbd> Rohr flicken / Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton</p>
+    <p>Stell dich unter das Leck und dichte es mit der Rohrzange ab. Große Lecks brauchen mehrere Handgriffe. Steigt das Wasser bis unters Dach, ist das Spiel vorbei.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+<script src="polyplay-core.js"></script>
+<script>
+(() => {
+'use strict';
+const { W, H, PAL, ctx, txt } = PP;
+
+/* ---------- Haus ---------- */
+const LEFT = 20, RIGHT = 300;
+const FLOOR_Y = [72, 122, 172, 222];                 // Fußboden je Etage (0 = oben)
+const PIPE_Y = FLOOR_Y.map(y => y - 46);            // Rohr unter der Decke
+const LADDERS = [                                   // Leiter zwischen Etage k und k+1
+  { k: 0, x: 262 }, { k: 0, x: 44 },
+  { k: 1, x: 154 },
+  { k: 2, x: 44 }, { k: 2, x: 262 }
+];
+const TOP_LIMIT = PIPE_Y[0] + 4;
+
+/* ---------- Sprites ---------- */
+const BODY = ['..RRRR..', '.RRRRRR.', '..SSSS..', '..SKSK..', '..SSSS..', '.UUUUUU.', 'SUUUUUUS', '.UUUUUU.', '..UUUU..'];
+const MAN = [
+  PP.pair([...BODY, '..U..U..', '..U..U..', '.KK..KK.']),
+  PP.pair([...BODY, '.U....U.', '.U....U.', 'KK....KK'])
+];
+const CLIMB = PP.pair(['..RRRR..', '.RRRRRR.', '..SSSS..', '..SSSS..', '..SSSS..', 'SUUUUUU.', '.UUUUUUS', '.UUUUUU.', '..UUUU..', '..U..U..', '..U..U..', '.KK..KK.']);
+
+/* ---------- Hintergrund ---------- */
+const BG = document.createElement('canvas');
+BG.width = W; BG.height = H;
+(() => {
+  const b = BG.getContext('2d');
+  b.fillStyle = '#101830'; b.fillRect(0, 12, W, H - 12);
+  // Dach
+  b.fillStyle = '#7a2010';
+  b.beginPath(); b.moveTo(LEFT - 8, 24); b.lineTo(W / 2, 13); b.lineTo(RIGHT + 8, 24); b.fill();
+  // Wände (Ziegel)
+  b.fillStyle = '#4a2a20'; b.fillRect(LEFT, 22, RIGHT - LEFT, 200);
+  b.fillStyle = '#5a3428';
+  for (let y = 22; y < 222; y += 6) for (let x = LEFT + ((y / 6) % 2) * 6; x < RIGHT; x += 12) b.fillRect(x, y, 11, 5);
+  // Fenster
+  FLOOR_Y.forEach(fy => [90, 200].forEach(x => {
+    b.fillStyle = '#20304a'; b.fillRect(x, fy - 36, 22, 24);
+    b.fillStyle = '#d0b060'; b.fillRect(x + 2, fy - 34, 8, 9); b.fillRect(x + 12, fy - 34, 8, 9); b.fillRect(x + 2, fy - 23, 8, 9); b.fillRect(x + 12, fy - 23, 8, 9);
+  }));
+  // Böden
+  FLOOR_Y.forEach(fy => { b.fillStyle = '#8a5a2a'; b.fillRect(LEFT, fy, RIGHT - LEFT, 4); b.fillStyle = '#c08040'; b.fillRect(LEFT, fy, RIGHT - LEFT, 1); });
+  // Rohre
+  PIPE_Y.forEach(py => {
+    b.fillStyle = '#909090'; b.fillRect(LEFT, py, RIGHT - LEFT, 4);
+    b.fillStyle = '#d0d0d0'; b.fillRect(LEFT, py, RIGHT - LEFT, 1);
+    b.fillStyle = '#606060'; for (let x = LEFT + 20; x < RIGHT; x += 40) b.fillRect(x, py - 1, 3, 6);
+  });
+  // Leitern
+  LADDERS.forEach(l => {
+    const y1 = FLOOR_Y[l.k], y2 = FLOOR_Y[l.k + 1];
+    b.fillStyle = '#d0a040';
+    b.fillRect(l.x, y1, 2, y2 - y1); b.fillRect(l.x + 12, y1, 2, y2 - y1);
+    for (let y = y1 + 4; y < y2; y += 7) b.fillRect(l.x, y, 14, 2);
+  });
+  b.fillStyle = '#2a1a0c'; b.fillRect(0, 226, W, 14);
+})();
+
+/* ---------- Ton ---------- */
+const sfx = {
+  clank: () => { PP.tone(1600, 1400, 0.05, 'square', 0.08); PP.noise(0.04, 0.08); },
+  fixed: () => PP.melody([523, 784, 1047], 0.07, 'square', 0.09),
+  leak:  () => { PP.noise(0.3, 0.07); PP.tone(300, 200, 0.2, 'triangle', 0.06); },
+  climb: () => PP.tone(700, 700, 0.02, 'square', 0.03)
+};
+
+/* ---------- Zustand ---------- */
+let man, leaks, water, spawnT, fixed, popups, elapsed;
+
+function reset() {
+  man = { x: 150, y: FLOOR_Y[3], floor: 3, ladder: null, face: 1, anim: 0, tool: 0 };
+  leaks = []; popups = [];
+  water = 222; spawnT = 2; fixed = 0; elapsed = 0;
+}
+reset();
+
+function spawnLeak() {
+  for (let tries = 0; tries < 10; tries++) {
+    const k = Math.floor(Math.random() * 4), x = PP.rand(LEFT + 16, RIGHT - 16);
+    if (leaks.some(l => l.k === k && Math.abs(l.x - x) < 36)) continue;
+    leaks.push({ k, x, size: 1, hp: 1, grow: 0, t: 0 });
+    sfx.leak();
+    return;
+  }
+}
+
+function ladderAt(x, floor, dir) {
+  // dir -1: nach oben (Leiter über dieser Etage), +1: nach unten
+  return LADDERS.find(l => (dir < 0 ? l.k === floor - 1 : l.k === floor) && Math.abs(x + 8 - (l.x + 7)) < 9);
+}
+
+function updateMan(dt) {
+  const K = PP.keys;
+  const inWater = man.y > water + 6;
+  const v = inWater ? 50 : 95;
+  man.tool = Math.max(0, man.tool - dt);
+  if (man.ladder) {
+    const l = man.ladder, top = FLOOR_Y[l.k], bot = FLOOR_Y[l.k + 1];
+    let dy = 0;
+    if (K.up) dy -= 1;
+    if (K.down) dy += 1;
+    if (dy) { man.y += dy * 70 * dt; man.anim += dt; if (Math.floor(man.anim * 8) !== Math.floor((man.anim - dt) * 8)) sfx.climb(); }
+    if (man.y <= top) { man.y = top; man.floor = l.k; man.ladder = null; }
+    else if (man.y >= bot) { man.y = bot; man.floor = l.k + 1; man.ladder = null; }
+    return;
+  }
+  if (K.up || K.down) {
+    const l = ladderAt(man.x, man.floor, K.up ? -1 : 1);
+    if (l) { man.ladder = l; man.x = l.x - 1; man.y += K.up ? -1 : 1; return; }
+  }
+  let mx = 0;
+  if (K.left) { mx -= 1; man.face = -1; }
+  if (K.right) { mx += 1; man.face = 1; }
+  if (mx) { man.x = PP.clamp(man.x + mx * v * dt, LEFT, RIGHT - 16); man.anim += dt; }
+}
+
+function repair(g) {
+  if (man.ladder) return;
+  man.tool = 0.18;
+  const l = leaks.find(l => l.k === man.floor && Math.abs(l.x - (man.x + 8)) < 14);
+  if (!l) return;
+  sfx.clank();
+  l.hp--;
+  if (l.hp <= 0) {
+    const pts = 50 * l.size;
+    g.score += pts; fixed++;
+    popups.push({ x: l.x, y: PIPE_Y[l.k] - 6, s: String(pts), t: 0 });
+    leaks.splice(leaks.indexOf(l), 1);
+    sfx.fixed();
+  }
+}
+
+PP.arcade({
+  recordKey: 'polyplay-wasserrohrbruch-rekord',
+  time: 90,
+  reset,
+  attractReset: reset,
+  attractUpdate(dt) {
+    spawnT -= dt;
+    if (spawnT <= 0 && leaks.length < 4) { leaks.push({ k: Math.floor(Math.random() * 4), x: PP.rand(40, 280), size: 2, hp: 2, grow: 0, t: 0 }); spawnT = 1.5; }
+    if (leaks.length >= 4 && spawnT < -3) { leaks.shift(); }
+    leaks.forEach(l => { l.t += dt; });
+  },
+  update(dt, g) {
+    elapsed += dt;
+    updateMan(dt);
+    if (PP.pressed('fire')) repair(g);
+
+    spawnT -= dt;
+    if (spawnT <= 0 && leaks.length < 8) { spawnLeak(); spawnT = Math.max(1.4, 4.2 - elapsed * 0.035) * PP.rand(0.7, 1.3); }
+    let flow = 0;
+    for (const l of leaks) {
+      l.t += dt; l.grow += dt;
+      if (l.grow > 6 && l.size < 3) { l.size++; l.hp++; l.grow = 0; }
+      flow += l.size;
+    }
+    // Wasserstand: Lecks füllen, die Pumpe im Keller zieht langsam ab
+    water += (0.55 - flow * 0.75) * dt;
+    water = Math.min(222, water);
+    if (water <= TOP_LIMIT) { water = TOP_LIMIT; g.end('flood'); }
+
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1);
+  },
+  draw(g) {
+    drawHouse();
+    if (g.state === 'play' || g.state === 'over') drawMan();
+    drawWater();
+    for (const p of popups) txt(p.s, p.x, p.y - p.t * 12, '#fff', 8, 'center');
+    // Pegelanzeige
+    const k = (222 - water) / (222 - TOP_LIMIT);
+    txt('PEGEL', 4, 229, PAL.C);
+    ctx.fillStyle = '#203040'; ctx.fillRect(48, 229, 100, 7);
+    ctx.fillStyle = k > 0.7 ? PAL.R : k > 0.4 ? PAL.Y : PAL.C; ctx.fillRect(48, 229, Math.round(100 * k), 7);
+    txt('LECKS ' + leaks.length, W - 4, 229, '#fff', 8, 'right');
+  },
+  attract() {
+    drawHouse();
+    drawWater();
+    PP.dim(0.6, 12, 210);
+    txt('WASSERROHRBRUCH', W / 2, 30, PAL.Y, 16, 'center');
+    PP.draw(MAN[0].r, 70, 64, 2);
+    txt('DER INSTALLATEUR', 100, 70, '#fff');
+    txt('DICHTET DIE ROHRE AB', 100, 82, '#fff');
+    txt('KLEINES LECK    50', 60, 112, PAL.C);
+    txt('MITTLERES LECK 100', 60, 126, PAL.C);
+    txt('GROSSES LECK   150', 60, 140, PAL.C);
+    txt('LEITERN MIT HOCH UND RUNTER', W / 2, 168, PAL.g, 8, 'center');
+    txt('ZANGE MIT LEERTASTE', W / 2, 182, PAL.g, 8, 'center');
+  },
+  overLines: g => [
+    ['GEFLICKT ' + PP.pad(fixed, 3)],
+    g.endReason === 'flood' ? ['DAS HAUS IST ABGESOFFEN', PAL.C] : ['DAS HAUS STEHT NOCH!', PAL.g]
+  ]
+});
+
+function drawHouse() {
+  ctx.drawImage(BG, 0, 0);
+  for (const l of leaks) {
+    const py = PIPE_Y[l.k] + 4, fy = FLOOR_Y[l.k];
+    // Spritzer am Rohr
+    ctx.fillStyle = '#80c0ff';
+    for (let i = -l.size; i <= l.size; i++) ctx.fillRect(Math.round(l.x + i * 3), py + (Math.floor(l.t * 10 + i) % 2), 2, 2);
+    // fallende Tropfen
+    for (let i = 0; i < 2 + l.size * 2; i++) {
+      const ph = (l.t * 1.6 + i / (2 + l.size * 2)) % 1;
+      const x = l.x + Math.sin(i * 2.3) * 3 * l.size, y = py + ph * (fy - py);
+      ctx.fillStyle = '#4aa0ff'; ctx.fillRect(Math.round(x), Math.round(y), 2, 3);
+    }
+    // Pfütze
+    ctx.fillStyle = '#3080e0'; ctx.fillRect(Math.round(l.x - 4 - l.size * 3), fy - 1, 8 + l.size * 6, 2);
+  }
+}
+
+function drawMan() {
+  const x = Math.round(man.x), y = Math.round(man.y - 24);
+  if (man.ladder) {
+    const s = CLIMB;
+    PP.draw(Math.floor(man.anim * 8) % 2 ? s.r : s.l, x, y, 2);
+    return;
+  }
+  const s = MAN[Math.floor(man.anim * 8) % 2];
+  PP.draw(man.face > 0 ? s.r : s.l, x, y, 2);
+  if (man.tool > 0) {
+    // Rohrzange nach oben gestreckt
+    const hx = x + (man.face > 0 ? 14 : 0);
+    ctx.fillStyle = '#c0c0c0'; ctx.fillRect(hx, PIPE_Y[man.floor] + 4, 2, y + 12 - PIPE_Y[man.floor] - 4);
+    ctx.fillStyle = PAL.R; ctx.fillRect(hx - 2, PIPE_Y[man.floor] + 4, 6, 3);
+  }
+}
+
+function drawWater() {
+  if (water >= 222) return;
+  ctx.fillStyle = 'rgba(40,110,255,0.45)';
+  ctx.fillRect(LEFT, Math.round(water), RIGHT - LEFT, 222 - Math.round(water));
+  ctx.fillStyle = '#a0d0ff';
+  for (let x = LEFT; x < RIGHT; x += 8) ctx.fillRect(x + Math.round(Math.sin(PP.time * 3 + x) * 2) + 2, Math.round(water), 4, 1);
+}
+})();
+</script>
+</body>
+</html>

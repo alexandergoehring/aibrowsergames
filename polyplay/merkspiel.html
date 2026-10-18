@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Merkspiel – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Merkspiel</span>
+  </header>
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Merkspiel"></canvas>
+  </div>
+  <footer class="help">
+    <p><kbd>↑</kbd> <kbd>←</kbd> <kbd>→</kbd> <kbd>↓</kbd> Feld wählen (oder antippen) &nbsp;·&nbsp; <kbd>Leertaste</kbd> Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton</p>
+    <p>Merke dir die Reihenfolge und spiele sie nach. Jede Runde kommt ein Feld dazu. Drei Fehler – dann ist Schluss.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+<script src="polyplay-core.js"></script>
+<script>
+(() => {
+'use strict';
+const { W, PAL, ctx, txt } = PP;
+
+/* ---------- Felder ---------- */
+const SYM = {
+  star:   ['...X...', '...X...', 'XXXXXXX', '.XXXXX.', '..XXX..', '.XX.XX.', 'XX...XX'],
+  heart:  ['.XX.XX.', 'XXXXXXX', 'XXXXXXX', '.XXXXX.', '..XXX..', '...X...', '.......'],
+  bell:   ['...X...', '..XXX..', '.XXXXX.', '.XXXXX.', '.XXXXX.', 'XXXXXXX', '...X...'],
+  flower: ['.X.X.X.', 'XXXXXXX', '.XXKXX.', 'XXXXXXX', '.X.X.X.', '...X...', '..XXX..']
+};
+const FIELDS = [
+  { key: 'up',    x: 125, y: 22,  sym: 'star',   on: '#ffe000', off: '#5a5000', f: 659, name: 'STERN' },
+  { key: 'left',  x: 45,  y: 84,  sym: 'heart',  on: '#ff3030', off: '#5a1010', f: 440, name: 'HERZ' },
+  { key: 'right', x: 205, y: 84,  sym: 'bell',   on: '#30e030', off: '#105a10', f: 554, name: 'GLOCKE' },
+  { key: 'down',  x: 125, y: 146, sym: 'flower', on: '#3070ff', off: '#10205a', f: 330, name: 'BLUME' }
+];
+const FW = 70, FH = 58;
+FIELDS.forEach(f => {
+  f.imgOn = PP.makeSprite(SYM[f.sym], { X: '#ffffff', K: f.on });
+  f.imgOff = PP.makeSprite(SYM[f.sym], { X: f.on, K: f.off });
+});
+
+/* ---------- Zustand ---------- */
+let seq, step, mode, modeT, lit, litT, lives, round, best, demoT;
+
+function reset() {
+  seq = []; lives = 3; round = 0; lit = -1; litT = 0;
+  nextRound();
+}
+function nextRound() {
+  round++;
+  seq.push(Math.floor(Math.random() * 4));
+  startShow(0.9);
+}
+function startShow(delay) { mode = 'show'; step = -1; modeT = -delay; lit = -1; }
+
+function light(i, dur, vol = 0.12) {
+  lit = i; litT = dur;
+  PP.tone(FIELDS[i].f, FIELDS[i].f, dur, 'square', vol);
+}
+
+const stepTime = () => Math.max(0.28, 0.6 - round * 0.025);
+
+function press(i, g) {
+  if (mode !== 'input') return;
+  light(i, 0.25);
+  if (i === seq[step]) {
+    g.score += 10;
+    step++; modeT = 0;
+    if (step === seq.length) {
+      g.score += round * 20;
+      mode = 'ok'; modeT = 0;
+    }
+  } else fail(g);
+}
+function fail(g) {
+  lives--; mode = 'fail'; modeT = 0; lit = -1;
+  PP.tone(110, 90, 0.7, 'sawtooth', 0.15);
+}
+
+const game = PP.arcade({
+  recordKey: 'polyplay-merkspiel-rekord',
+  time: null,
+  reset,
+  attractReset() { demoT = 0; },
+  attractUpdate(dt) {
+    demoT = (demoT || 0) + dt;
+    litT -= dt;
+    if (demoT > 0.5) { demoT = 0; lit = Math.floor(Math.random() * 4); litT = 0.3; }
+    if (litT <= 0) lit = -1;
+  },
+  update(dt, g) {
+    litT -= dt;
+    if (litT <= 0) lit = -1;
+    modeT += dt;
+    const st = stepTime();
+    if (mode === 'show') {
+      if (modeT >= 0) {
+        const n = Math.floor(modeT / st);
+        if (n !== step && n < seq.length) { step = n; light(seq[n], st * 0.75); }
+        if (n >= seq.length && litT <= 0) { mode = 'input'; step = 0; modeT = 0; PP.clearPressed(); }
+      }
+    } else if (mode === 'input') {
+      FIELDS.forEach((f, i) => { if (PP.pressed(f.key)) press(i, g); });
+      if (mode === 'input' && modeT > 5) fail(g);          // zu lange gezögert
+    } else if (mode === 'ok') {
+      if (modeT > 0.9) nextRound();
+    } else if (mode === 'fail') {
+      if (lives <= 0) { if (modeT > 0.9) g.end('fehler'); }
+      else if (modeT > 1.4) startShow(0.3);              // gleiche Folge noch einmal
+    }
+    PP.clearPressed();
+  },
+  draw(g) {
+    drawFields();
+    // Mitte: Runde und Status
+    let msg = '', col = '#fff';
+    if (mode === 'show') { msg = 'MERKEN'; col = PAL.C; }
+    else if (mode === 'input') { msg = (seq.length - step) + ''; col = PAL.Y; }
+    else if (mode === 'ok') { msg = 'GUT!'; col = PAL.g; }
+    else if (mode === 'fail') { msg = 'FALSCH'; col = PAL.R; }
+    txt('RUNDE', 160, 100, '#fff', 8, 'center');
+    txt(String(round), 160, 110, PAL.Y, 8, 'center');
+    if (mode !== 'input' || PP.blinkOn(0.8, 0.8)) txt(msg, 160, 126, col, 8, 'center');
+    if (mode === 'input') {
+      const k = Math.max(0, 1 - modeT / 5);
+      ctx.fillStyle = k < 0.3 ? PAL.R : PAL.g; ctx.fillRect(140, 138, Math.round(40 * k), 2);
+    }
+    txt('FEHLER', 4, 228, PAL.C);
+    for (let i = 0; i < 3; i++) txt(i < 3 - lives ? 'X' : '-', 60 + i * 10, 228, i < 3 - lives ? PAL.R : '#555');
+    txt('LAENGE ' + seq.length, W - 4, 228, '#fff', 8, 'right');
+    if (mode === 'fail' && PP.blinkOn(0.2, 0.5)) { ctx.fillStyle = 'rgba(255,0,0,0.15)'; ctx.fillRect(0, 12, W, 210); }
+  },
+  attract() {
+    drawFields();
+    PP.dim(0.55, 12, 210);
+    txt('MERKSPIEL', W / 2, 40, PAL.Y, 16, 'center');
+    txt('FOLGE ANSEHEN', W / 2, 86, '#fff', 8, 'center');
+    txt('UND NACHSPIELEN', W / 2, 100, '#fff', 8, 'center');
+    txt('JEDES FELD   10 PKT', W / 2, 130, PAL.C, 8, 'center');
+    txt('RUNDE GESCHAFFT  RUNDE X 20', W / 2, 146, PAL.C, 8, 'center');
+    txt('3 FEHLER - SPIELENDE', W / 2, 172, PAL.R, 8, 'center');
+  },
+  overLines: () => [['RUNDE  ' + PP.pad(round, 3)], ['LAENGE ' + PP.pad(Math.max(0, seq.length - 1), 3)]]
+});
+
+PP.onTap = (x, y) => {
+  if (game.state !== 'play' || PP.paused) return false;
+  FIELDS.forEach((f, i) => {
+    if (x >= f.x && x < f.x + FW && y >= f.y && y < f.y + FH) PP.press(f.key);
+  });
+  return true;
+};
+
+function drawFields() {
+  FIELDS.forEach((f, i) => {
+    const on = lit === i;
+    ctx.fillStyle = on ? f.on : f.off;
+    ctx.fillRect(f.x, f.y, FW, FH);
+    ctx.fillStyle = on ? '#ffffff' : f.on;
+    ctx.fillRect(f.x, f.y, FW, 2); ctx.fillRect(f.x, f.y + FH - 2, FW, 2);
+    ctx.fillRect(f.x, f.y, 2, FH); ctx.fillRect(f.x + FW - 2, f.y, 2, FH);
+    PP.draw(on ? f.imgOn : f.imgOff, f.x + FW / 2 - 10.5, f.y + FH / 2 - 10.5, 3);
+  });
+}
+})();
+</script>
+</body>
+</html>

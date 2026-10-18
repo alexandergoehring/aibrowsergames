@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Abfahrtslauf – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Abfahrtslauf</span>
+  </header>
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Abfahrtslauf"></canvas>
+  </div>
+  <div class="touch dpad" id="touch" aria-hidden="true">
+    <button data-k="up" class="up">BREMS</button>
+    <button data-k="left" class="left">◀</button>
+    <button data-k="fire" class="mid">START</button>
+    <button data-k="right" class="right">▶</button>
+    <button data-k="down" class="down">HOCKE</button>
+  </div>
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>→</kbd> Ski drehen &nbsp;·&nbsp; <kbd>↓</kbd> Hocke (schneller) &nbsp;·&nbsp; <kbd>↑</kbd> Bremsen &nbsp;·&nbsp; <kbd>Leertaste</kbd> Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton</p>
+    <p>Fahre durch die Tore. Ein verpasstes Tor kostet 3 Sekunden, Bäume und Felsen bringen dich zu Fall.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+<script src="polyplay-core.js"></script>
+<script>
+(() => {
+'use strict';
+const { W, H, PAL, ctx, txt } = PP;
+const TOP = 12, BOTTOM = 222, SKI_Y = 64;
+const ANGLES = [-62, -34, 0, 34, 62].map(a => a * Math.PI / 180);
+
+/* ---------- Sprites ---------- */
+const SKIER = PP.makeSprite([
+  '...WW...',
+  '..RRRR..',
+  '...SS...',
+  '..RRRR..',
+  '.SRRRRS.',
+  '..RRRR..',
+  '..UUUU..',
+  '..U..U..',
+  '..U..U..'
+]);
+const TUCK = PP.makeSprite([
+  '........',
+  '........',
+  '...WW...',
+  '..RRRR..',
+  '..RSSR..',
+  'SRRRRRRS',
+  '..UUUU..',
+  '.UU..UU.',
+  '..U..U..'
+]);
+const TREE = PP.makeSprite([
+  '....WW....',
+  '...GWGG...',
+  '..GGGGWG..',
+  '...GGGG...',
+  '..GWGGGG..',
+  '.GGGGGWGG.',
+  '...GGGG...',
+  '..GGGGGWG.',
+  '.GWGGGGGGG',
+  'GGGGGGGGWG',
+  '....BB....',
+  '....BB....'
+], { G: '#0c5a2a', W: '#e8f0ff' });
+const ROCK = PP.makeSprite([
+  '..NNNN..',
+  '.NNNNNW.',
+  'NNNDNNNN',
+  'NNNNNDNN',
+  '.NNNNNN.'
+], { W: '#ffffff' });
+
+/* ---------- Ton ---------- */
+const sfx = {
+  gate: n => PP.melody([880 + n * 40, 1320 + n * 40], 0.06, 'square', 0.08),
+  miss: () => PP.tone(300, 150, 0.3, 'square', 0.1),
+  fall: () => { PP.noise(0.5, 0.25); PP.tone(500, 60, 0.6, 'sawtooth', 0.08); },
+  swish: () => PP.noise(0.06, 0.04)
+};
+
+/* ---------- Zustand ---------- */
+let dist, ski, gates, obstacles, trail, nextGateY, gateX, gatesOk, gatesMissed, falls, streak, popups, holdT;
+
+function reset() {
+  dist = 0;
+  ski = { x: 152, h: 2, v: 60, fall: 0 };
+  gates = []; obstacles = []; trail = []; popups = [];
+  nextGateY = 200; gateX = 160;
+  gatesOk = 0; gatesMissed = 0; falls = 0; streak = 0; holdT = 0;
+  generate();
+}
+
+function generate() {
+  // Strecke vorausplanen: Tore und Hindernisse bis knapp unter den Bildschirm
+  while (nextGateY < dist + H + 60) {
+    const n = gates.length + gatesOk + gatesMissed;
+    const width = Math.max(34, 56 - n * 0.6);
+    gateX = PP.clamp(gateX + PP.rand(-80, 80), 40 + width / 2, W - 40 - width / 2);
+    gates.push({ y: nextGateY, x: gateX, w: width, color: n % 2 ? PAL.U : PAL.R, done: false });
+    // Hindernisse zwischen den Toren, aber nicht direkt im Tor
+    const count = Math.min(5, 1 + Math.floor(n / 6));
+    for (let i = 0; i < count; i++) {
+      const y = nextGateY + PP.rand(25, 85);
+      let x = PP.rand(6, W - 20);
+      if (Math.abs(x - gateX) < width) x = (x + W / 2) % (W - 20);
+      obstacles.push({ y, x, kind: Math.random() < 0.7 ? 'tree' : 'rock' });
+    }
+    nextGateY += PP.rand(95, 130);
+  }
+}
+
+const screenY = wy => wy - dist + SKI_Y;
+reset();
+
+PP.arcade({
+  recordKey: 'polyplay-abfahrtslauf-rekord',
+  time: 90,
+  reset,
+  attractReset: reset,
+  attractUpdate(dt) {
+    // Vorführfahrt: steuert selbst auf das nächste Tor zu
+    const g = gates.find(g => !g.done && g.y > dist);
+    if (g) { const d = g.x - (ski.x + 8); ski.h = d < -20 ? 1 : d > 20 ? 3 : 2; }
+    move(dt, null, false);
+  },
+  update(dt, g) {
+    const K = PP.keys;
+    if (ski.fall > 0) {
+      ski.fall -= dt; ski.v = 0;
+      if (ski.fall <= 0) { ski.h = 2; ski.v = 30; }
+    } else {
+      // Ski drehen: Tippen oder Halten (Wiederholung)
+      if (PP.pressed('left')) { ski.h = Math.max(0, ski.h - 1); holdT = 0.22; sfx.swish(); }
+      if (PP.pressed('right')) { ski.h = Math.min(4, ski.h + 1); holdT = 0.22; sfx.swish(); }
+      if (K.left || K.right) {
+        holdT -= dt;
+        if (holdT <= 0) { ski.h = PP.clamp(ski.h + (K.left ? -1 : 1), 0, 4); holdT = 0.16; }
+      }
+    }
+    move(dt, g, true);
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1.1);
+  },
+  overUpdate() {},
+  draw(g) { drawSlope(); if (g.state === 'play') drawHud(); },
+  attract() {
+    drawSlope();
+    PP.dim(0.55, 12, 210);
+    txt('ABFAHRTSLAUF', W / 2, 30, PAL.Y, 16, 'center');
+    flag(110, 84, PAL.R); flag(150, 84, PAL.R);
+    txt('TOR = 50 PKT', 170, 86, '#fff');
+    txt('SERIE: +10 JE TOR', 170, 100, PAL.C);
+    PP.draw(TREE, 110, 120, 2); PP.draw(ROCK, 140, 136, 2);
+    txt('STURZ!', 170, 132, PAL.R);
+    txt('TOR VERPASST: -3 SEK', W / 2, 172, PAL.Y, 8, 'center');
+    txt('HOCKE MACHT SCHNELL', W / 2, 188, PAL.g, 8, 'center');
+  },
+  overLines: () => [
+    ['TORE      ' + PP.pad(gatesOk, 3), PAL.g],
+    ['VERPASST  ' + PP.pad(gatesMissed, 3), PAL.Y],
+    ['STUERZE   ' + PP.pad(falls, 3), PAL.R]
+  ]
+});
+
+function move(dt, g, live) {
+  const K = PP.keys;
+  if (ski.fall <= 0) {
+    const a = ANGLES[ski.h];
+    const target = (live && K.down ? 240 : live && K.up ? 60 : 165) * (1 - Math.abs(Math.sin(a)) * 0.35);
+    ski.v += PP.clamp(target - ski.v, -160 * dt, 90 * dt);
+    ski.x += Math.sin(a) * ski.v * dt;
+    dist += Math.cos(a) * ski.v * dt;
+    if (ski.x < 0 || ski.x > W - 16) { ski.x = PP.clamp(ski.x, 0, W - 16); ski.h = 2; ski.v *= 0.6; }
+    trail.push({ x: ski.x + 8, y: dist + 10 });
+    if (trail.length > 140) trail.shift();
+  }
+  // Tore prüfen
+  for (const gt of gates) {
+    if (gt.done || gt.y > dist + 18) continue;
+    gt.done = true;
+    const cx = ski.x + 8;
+    if (Math.abs(cx - gt.x) <= gt.w / 2) {
+      if (g) {
+        const pts = 50 + streak * 10;
+        g.score += pts; gatesOk++; streak++;
+        popups.push({ x: gt.x, y: screenY(gt.y) - 12, s: String(pts), c: '#fff', t: 0 });
+        sfx.gate(Math.min(streak, 10));
+      }
+    } else if (g) {
+      gatesMissed++; streak = 0; gt.missed = true;
+      g.timeLeft = Math.max(0.01, g.timeLeft - 3);
+      popups.push({ x: gt.x, y: screenY(gt.y) - 12, s: 'TOR VERPASST -3', c: PAL.R, t: 0 });
+      sfx.miss();
+    }
+  }
+  // Hindernisse
+  if (ski.fall <= 0 && live) {
+    for (const o of obstacles) {
+      const ow = o.kind === 'tree' ? 20 : 16, oh = o.kind === 'tree' ? 24 : 10;
+      const oy = o.kind === 'tree' ? o.y - 18 : o.y;
+      // nur Stamm bzw. Felsen zählt
+      const hit = o.kind === 'tree'
+        ? Math.abs(ski.x + 8 - (o.x + 10)) < 8 && Math.abs(dist + 18 - (oy + oh)) < 8
+        : Math.abs(ski.x + 8 - (o.x + 8)) < 10 && Math.abs(dist + 18 - (oy + 5)) < 7;
+      if (hit && !o.hit) {
+        o.hit = true; ski.fall = 1.3; falls++; streak = 0; sfx.fall();
+        popups.push({ x: ski.x + 8, y: SKI_Y - 10, s: 'STURZ!', c: PAL.R, t: 0 });
+        break;
+      }
+    }
+  }
+  gates = gates.filter(gt => gt.y > dist - 120);
+  obstacles = obstacles.filter(o => o.y > dist - 120);
+  generate();
+}
+
+function flag(x, y, c) {
+  ctx.fillStyle = '#333'; ctx.fillRect(Math.round(x), Math.round(y), 2, 16);
+  ctx.fillStyle = c;
+  ctx.beginPath(); ctx.moveTo(Math.round(x) + 2, Math.round(y)); ctx.lineTo(Math.round(x) + 11, Math.round(y) + 4); ctx.lineTo(Math.round(x) + 2, Math.round(y) + 8); ctx.fill();
+}
+
+function drawSlope() {
+  ctx.fillStyle = '#eef3ff'; ctx.fillRect(0, TOP, W, BOTTOM - TOP);
+  // Schneestruktur
+  ctx.fillStyle = '#c8d4f0';
+  for (let i = 0; i < 70; i++) {
+    const wy = Math.floor(dist / 37) * 37 + i * 7;
+    const x = (Math.sin(i * 91.7 + Math.floor(dist / 37) * 13.3) * 0.5 + 0.5) * W;
+    const y = wy - dist + TOP;
+    if (y > TOP && y < BOTTOM) ctx.fillRect(Math.round(x), Math.round(y), 3, 1);
+  }
+  // Spur
+  ctx.fillStyle = '#a8b8e0';
+  for (const p of trail) {
+    const y = screenY(p.y);
+    if (y > TOP && y < BOTTOM) { ctx.fillRect(Math.round(p.x - 3), Math.round(y), 1, 2); ctx.fillRect(Math.round(p.x + 2), Math.round(y), 1, 2); }
+  }
+  const objs = [];
+  for (const gt of gates) objs.push({ y: gt.y, draw: () => {
+    const y = screenY(gt.y) - 16;
+    const c = gt.done && gt.missed ? '#888' : gt.color;
+    flag(gt.x - gt.w / 2, y, c); flag(gt.x + gt.w / 2 - 2, y, c);
+  } });
+  for (const o of obstacles) objs.push({ y: o.y, draw: () => {
+    if (o.kind === 'tree') PP.draw(TREE, o.x, screenY(o.y) - 18, 2);
+    else PP.draw(ROCK, o.x, screenY(o.y), 2);
+  } });
+  objs.push({ y: dist + 18, draw: drawSkier });
+  objs.sort((a, b) => a.y - b.y).forEach(o => { const y = screenY(o.y); if (y > -40 && y < BOTTOM + 40) o.draw(); });
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, TOP); ctx.fillRect(0, BOTTOM, W, H - BOTTOM);
+  for (const p of popups) txt(p.s, p.x, p.y - p.t * 12, p.c, 8, 'center');
+}
+
+function drawSkier() {
+  const x = Math.round(ski.x), y = SKI_Y;
+  if (ski.fall > 0) {
+    // Schneewolke und liegender Fahrer
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 12; i++) ctx.fillRect(x + 8 + Math.round(Math.cos(i) * (6 + (1.3 - ski.fall) * 14)), y + 12 + Math.round(Math.sin(i * 1.7) * 8), 3, 3);
+    ctx.save(); ctx.translate(x + 8, y + 12); ctx.rotate(Math.PI / 2); ctx.drawImage(SKIER, -8, -9, 16, 18); ctx.restore();
+    return;
+  }
+  const a = ANGLES[ski.h];
+  // Ski
+  ctx.strokeStyle = '#202020'; ctx.lineWidth = 2;
+  const fx = x + 8, fy = y + 18, dx = Math.sin(a) * 10, dy = Math.cos(a) * 10;
+  ctx.beginPath();
+  ctx.moveTo(fx - 3 - dx, fy - dy * 0.4); ctx.lineTo(fx - 3 + dx, fy + dy * 0.4);
+  ctx.moveTo(fx + 3 - dx, fy - dy * 0.4); ctx.lineTo(fx + 3 + dx, fy + dy * 0.4);
+  ctx.stroke();
+  PP.draw(PP.keys.down && ski.v > 100 ? TUCK : SKIER, x, y, 2);
+  // Stöcke
+  ctx.fillStyle = '#606060';
+  ctx.fillRect(x - 1, y + 9, 1, 10); ctx.fillRect(x + 16, y + 9, 1, 10);
+}
+
+function drawHud() {
+  txt(String(Math.round(ski.v * 0.4)).padStart(3, ' ') + ' KM/H', 4, 228, PAL.g);
+  txt('TORE ' + gatesOk, W - 4, 228, '#fff', 8, 'right');
+}
+})();
+</script>
+</body>
+</html>

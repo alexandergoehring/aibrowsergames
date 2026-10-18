@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Hase und Wolf – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Hase und Wolf</span>
+  </header>
+
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Hase und Wolf"></canvas>
+  </div>
+
+  <div class="touch dpad" id="touch" aria-hidden="true">
+    <button data-k="up" class="up">▲</button>
+    <button data-k="left" class="left">◀</button>
+    <button data-k="start" class="mid">START</button>
+    <button data-k="right" class="right">▶</button>
+    <button data-k="down" class="down">▼</button>
+  </div>
+
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd> Hase lenken &nbsp;·&nbsp; <kbd>Leertaste</kbd> Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton aus/an</p>
+    <p>Möhren fressen, Wölfen ausweichen. Ein Kohlkopf macht die Wölfe ängstlich – dann kann der Hase sie verjagen.</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- Grundlagen ---------- */
+const W = 320, H = 240;
+const GAME_TIME = 120, LIVES = 3;
+const cv = document.getElementById('screen');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const PAL = {
+  Y:'#ffe000', O:'#ff8a00', K:'#000000', W:'#ffffff', P:'#ff70b0', R:'#ff3030',
+  G:'#20b020', g:'#90ff70', B:'#a05020', C:'#00e0ff', M:'#e040ff', N:'#a0a0a0'
+};
+
+function makeSprite(rows, map = {}) {
+  const h = rows.length, w = rows[0].length;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  rows.forEach((r, j) => [...r].forEach((ch, i) => {
+    if (ch === '.') return;
+    x.fillStyle = map[ch] || PAL[ch];
+    x.fillRect(i, j, 1, 1);
+  }));
+  return c;
+}
+function mirror(src) {
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const x = c.getContext('2d');
+  x.translate(src.width, 0); x.scale(-1, 1); x.drawImage(src, 0, 0);
+  return c;
+}
+function pair(rows, map) { const r = makeSprite(rows, map); return { r, l: mirror(r) }; }
+
+const HARE_TOP = [
+  '.....W.W..',
+  '.....WPWP.',
+  '.....WPWP.',
+  '......WWW.',
+  '.....WWKWW',
+  '.WWWWWWWWP',
+  'WWWWWWWWW.',
+  '.WWWWWWWW.'
+];
+const HARE = [
+  pair([...HARE_TOP, '..W....W..', '.WW...WW..']),
+  pair([...HARE_TOP, '.W......W.', 'W........W'])
+];
+
+const WOLF_TOP = [
+  '......N.N.',
+  '.....NNNN.',
+  '.....NKNNN',
+  'N....NNNNK',
+  '.N.NNNNNN.',
+  '..NNNNNNN.',
+  '..NNNNNNN.',
+  '..NNNNNN..'
+];
+const WOLF_LEGS = [['..N....N..', '..NN...NN.'], ['.N......N.', 'N........N']];
+const wolfSprites = map => WOLF_LEGS.map(l => pair([...WOLF_TOP, ...l], map));
+const WOLF_COLORS = ['#b0b0b0', '#d07830', '#a080ff', '#e04848'];
+const WOLF_SPR = WOLF_COLORS.map(c => wolfSprites({ N: c }));
+const SCARED_SPR = wolfSprites({ N: '#2850ff', K: '#ffffff' });
+const FLASH_SPR = wolfSprites({ N: '#ffffff', K: '#ff3030' });
+
+const CABBAGE = makeSprite([
+  '..GGGG..',
+  '.GgGGgG.',
+  'GGgGGgGG',
+  'GgGGGGgG',
+  'GGGgGGGG',
+  'GgGGgGgG',
+  '.GGgGGG.',
+  '..GGGG..'
+]);
+const CARROT = makeSprite([
+  '..g.g...',
+  '...g....',
+  '..OOOO..',
+  '..OOOO..',
+  '..OOO...',
+  '...OO...',
+  '...OO...',
+  '...O....'
+]);
+
+/* ---------- Ton ---------- */
+let ac = null, muted = false;
+function audioOn() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
+  if (ac && ac.state === 'suspended') ac.resume();
+}
+function tone(f1, f2, dur, type = 'square', vol = 0.1, delay = 0) {
+  if (!ac || muted) return;
+  const t = ac.currentTime + delay;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f2, 1), t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(ac.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+let chompHi = false;
+const sfx = {
+  chomp:  () => { chompHi = !chompHi; tone(chompHi ? 520 : 390, chompHi ? 380 : 520, 0.06, 'triangle', 0.12); },
+  power:  () => { [300, 450, 600, 750, 900].forEach((f, i) => tone(f, f * 1.2, 0.06, 'square', 0.07, i * 0.05)); },
+  eatWolf:() => { tone(200, 1600, 0.3, 'square', 0.09); },
+  bonus:  () => { [1047, 1319, 1568].forEach((f, i) => tone(f, f, 0.08, 'square', 0.09, i * 0.08)); },
+  death:  () => { tone(900, 80, 1.2, 'square', 0.1); },
+  clear:  () => { [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(f, f, 0.12, 'triangle', 0.15, i * 0.12)); },
+  start:  () => { [392, 523, 659, 784, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.14, 'square', 0.08, i * 0.15)); },
+  tick:   () => tone(1800, 1800, 0.03, 'square', 0.05),
+  over:   () => { [784, 659, 523, 392, 262].forEach((f, i) => tone(f, f * 0.98, 0.18, 'triangle', 0.15, i * 0.17)); }
+};
+
+/* ---------- Text ---------- */
+function txt(s, x, y, color = '#fff', size = 8, align = 'left') {
+  ctx.font = `${size}px "Press Start 2P", monospace`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = align;
+  ctx.fillStyle = color;
+  ctx.fillText(s, Math.round(x), Math.round(y));
+}
+const pad = (n, l = 5) => String(n).padStart(l, '0');
+
+/* ---------- Rekord ---------- */
+const REC_KEY = 'polyplay-hase-und-wolf-rekord';
+let record = 0;
+try { record = parseInt(localStorage.getItem(REC_KEY), 10) || 0; } catch (e) { /* ohne Speicher */ }
+function saveRecord() { try { localStorage.setItem(REC_KEY, String(record)); } catch (e) { /* egal */ } }
+
+/* ---------- Labyrinth ---------- */
+// # Hecke   . Möhre   o Kohlkopf   - Tür zum Wolfsbau   W Wolfsbau   H Start Hase
+const MAZE = [
+  '#########################',
+  '#...........#...........#',
+  '#o###.#####.#.#####.###o#',
+  '#.......................#',
+  '#.###.#.#########.#.###.#',
+  '#.....#.....#.....#.....#',
+  '#####.#####.#.#####.#####',
+  '#####.#           #.#####',
+  '#####.# ###---### #.#####',
+  '     .  #WWWWWWW#  .     ',
+  '#####.# ######### #.#####',
+  '#####.#           #.#####',
+  '#####.# ######### #.#####',
+  '#...........#...........#',
+  '#.###.#####.#.#####.###.#',
+  '#o..#.......H.......#..o#',
+  '###.#.#.#########.#.#.###',
+  '#.....#.....#.....#.....#',
+  '#.#########.#.#########.#',
+  '#.......................#',
+  '#########################'
+];
+const COLS = 25, ROWS = 21, T = 10, OX = 35, OY = 16;
+const HARE_START = { c: 12, r: 15 };
+const DEN_EXIT = { c: 12, r: 7 }, DEN_HOME = { c: 12, r: 9 };
+const BONUS_TILE = { c: 12, r: 11 };
+const CORNERS = [{ c: 23, r: 1 }, { c: 1, r: 1 }, { c: 23, r: 19 }, { c: 1, r: 19 }];
+const DIRS = [[0, -1], [-1, 0], [0, 1], [1, 0]];   // hoch, links, runter, rechts
+
+let grid, dotsLeft, dotsEaten;
+function loadMaze() {
+  grid = MAZE.map(r => [...r]);
+  grid[HARE_START.r][HARE_START.c] = ' ';
+  dotsLeft = 0; dotsEaten = 0;
+  for (const row of grid) for (const ch of row) if (ch === '.' || ch === 'o') dotsLeft++;
+}
+const wrapC = c => (c % COLS + COLS) % COLS;
+function tile(c, r) { return (r < 0 || r >= ROWS) ? '#' : grid[r][wrapC(c)]; }
+function passable(c, r, mode) {
+  const t = tile(c, r);
+  if (t === '#') return false;
+  if (t === '-' || t === 'W') return mode === 'exit' || mode === 'eaten';
+  return true;
+}
+
+// Hecken einmal vorzeichnen
+function renderMaze(fill, edge) {
+  const m = document.createElement('canvas');
+  m.width = COLS * T; m.height = ROWS * T;
+  const x = m.getContext('2d');
+  const wall = (c, r) => r < 0 || r >= ROWS || c < 0 || c >= COLS ? MAZE[Math.max(0, Math.min(ROWS - 1, r))][Math.max(0, Math.min(COLS - 1, c))] === '#' : MAZE[r][c] === '#';
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = MAZE[r][c];
+    if (ch === '#') {
+      x.fillStyle = fill; x.fillRect(c * T, r * T, T, T);
+      x.fillStyle = edge;
+      if (!wall(c, r - 1)) x.fillRect(c * T, r * T, T, 1);
+      if (!wall(c, r + 1)) x.fillRect(c * T, r * T + T - 1, T, 1);
+      if (!wall(c - 1, r)) x.fillRect(c * T, r * T, 1, T);
+      if (!wall(c + 1, r)) x.fillRect(c * T + T - 1, r * T, 1, T);
+      // ein paar Blätter
+      if ((c * 7 + r * 13) % 5 === 0) { x.fillRect(c * T + 3, r * T + 4, 1, 1); x.fillRect(c * T + 6, r * T + 6, 1, 1); }
+    } else if (ch === '-') {
+      x.fillStyle = PAL.B; x.fillRect(c * T, r * T + 4, T, 2);
+    }
+  }
+  return m;
+}
+const MAZE_IMG = renderMaze('#0b3d0b', '#3cd23c');
+const MAZE_FLASH = renderMaze('#3cd23c', '#ffffff');
+
+/* ---------- Spielzustand ---------- */
+let state = 'attract';   // attract | ready | play | dying | clear | over
+let stateT = 0, blink = 0, paused = false;
+let hare, wolves, wantDir, score, lives, level, timeLeft, lastTick, powerT, wolfChain;
+let bonus, popups, newRecord, roundT;
+
+function newHare() {
+  return { c: HARE_START.c, r: HARE_START.r, dir: [-1, 0], p: 0, face: -1, anim: 0 };
+}
+function newWolves() {
+  const starts = [[12, 7, 0], [10, 9, 2], [12, 9, 5], [14, 9, 8]];
+  return starts.map(([c, r, rel], i) => ({
+    i, c, r, dir: i === 0 ? [-1, 0] : null, p: 0, face: -1, anim: 0,
+    mode: i === 0 ? 'chase' : 'den', release: rel, scared: false,
+    rand: [0.05, 0.15, 0.3, 0.45][i]
+  }));
+}
+function resetPositions() {
+  hare = newHare(); wolves = newWolves();
+  wantDir = [-1, 0]; powerT = 0; roundT = 0;
+  if (bonus) bonus = null;
+}
+function newGame() {
+  score = 0; lives = LIVES; level = 1; timeLeft = GAME_TIME; lastTick = 0;
+  popups = []; bonus = null; newRecord = false;
+  loadMaze(); resetPositions();
+  setState('ready'); sfx.start();
+}
+function setState(s) { state = s; stateT = 0; }
+
+/* ---------- Eingabe ---------- */
+const KEYMAP = {
+  ArrowUp: 0, KeyW: 0, ArrowLeft: 1, KeyA: 1, ArrowDown: 2, KeyS: 2, ArrowRight: 3, KeyD: 3
+};
+let startPressed = false;
+function pressStart() { startPressed = true; audioOn(); }
+addEventListener('keydown', e => {
+  if (e.code in KEYMAP) { e.preventDefault(); wantDir = DIRS[KEYMAP[e.code]]; audioOn(); }
+  if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); pressStart(); }
+  if (e.code === 'KeyP' && state === 'play') paused = !paused;
+  if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('blur', () => { if (state === 'play') paused = true; });
+
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault(); audioOn(); b.classList.add('on');
+    if (k === 'start') pressStart();
+    else wantDir = DIRS[{ up: 0, left: 1, down: 2, right: 3 }[k]];
+  });
+  const up = () => b.classList.remove('on');
+  b.addEventListener('pointerup', up); b.addEventListener('pointerleave', up); b.addEventListener('pointercancel', up);
+});
+// Wischen auf dem Bildschirm
+let swipe = null;
+cv.addEventListener('pointerdown', e => { audioOn(); swipe = { x: e.clientX, y: e.clientY }; if (state !== 'play' || paused) pressStart(); });
+cv.addEventListener('pointermove', e => {
+  if (!swipe) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  if (Math.hypot(dx, dy) < 18) return;
+  wantDir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? DIRS[3] : DIRS[1]) : (dy > 0 ? DIRS[2] : DIRS[0]);
+  swipe = { x: e.clientX, y: e.clientY };
+});
+addEventListener('pointerup', () => { swipe = null; });
+
+/* ---------- Bewegung ---------- */
+const opposite = (a, b) => a && b && a[0] === -b[0] && a[1] === -b[1];
+const pos = e => ({ x: e.c + (e.dir ? e.dir[0] * e.p : 0), y: e.r + (e.dir ? e.dir[1] * e.p : 0) });
+
+function move(e, dist, decide, onTile) {
+  let guard = 0;
+  while (dist > 0 && guard++ < 8) {
+    if (!e.dir) { decide(e); if (!e.dir) return; }
+    const need = 1 - e.p;
+    if (dist < need) { e.p += dist; return; }
+    dist -= need;
+    e.c = wrapC(e.c + e.dir[0]); e.r += e.dir[1]; e.p = 0;
+    if (onTile) onTile(e);
+    decide(e);
+  }
+}
+
+function decideHare(h) {
+  if (wantDir && passable(h.c + wantDir[0], h.r + wantDir[1], 'hare')) h.dir = wantDir;
+  else if (!(h.dir && passable(h.c + h.dir[0], h.r + h.dir[1], 'hare'))) { h.dir = null; h.p = 0; }
+  if (h.dir && h.dir[0]) h.face = h.dir[0];
+}
+
+function wolfTarget(w) {
+  if (w.mode === 'exit') return DEN_EXIT;
+  if (w.mode === 'eaten') return DEN_HOME;
+  if (roundT < 5) return CORNERS[w.i];           // erst in die Ecken, dann jagen
+  const hp = { c: hare.c, r: hare.r };
+  if (w.i === 1 && hare.dir) return { c: hp.c + hare.dir[0] * 4, r: hp.r + hare.dir[1] * 4 };
+  if (w.i === 3 && Math.hypot(w.c - hp.c, w.r - hp.r) < 6) return { c: 1, r: 19 };
+  return hp;
+}
+
+function decideWolf(w) {
+  const mode = w.mode;
+  let opts = DIRS.filter(d => !opposite(d, w.dir) && passable(w.c + d[0], w.r + d[1], mode));
+  if (!opts.length) {
+    const back = w.dir && [-w.dir[0], -w.dir[1]];
+    w.dir = back && passable(w.c + back[0], w.r + back[1], mode) ? back : null;
+  } else if (w.scared || (mode === 'chase' && Math.random() < w.rand)) {
+    w.dir = opts[Math.floor(Math.random() * opts.length)];
+  } else {
+    const t = wolfTarget(w);
+    let best = null, bd = Infinity;
+    for (const d of opts) {
+      const dd = Math.hypot(w.c + d[0] - t.c, w.r + d[1] - t.r);
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    w.dir = best;
+  }
+  if (w.dir && w.dir[0]) w.face = w.dir[0];
+}
+
+function wolfArrived(w) {
+  if (w.mode === 'exit' && w.r <= DEN_EXIT.r) { w.mode = 'chase'; }
+  if (w.mode === 'eaten' && w.c === DEN_HOME.c && w.r === DEN_HOME.r) {
+    w.mode = 'den'; w.release = roundT + 1; w.dir = null; w.p = 0; w.scared = false;
+  }
+}
+
+function eatTile(h) {
+  const ch = grid[h.r][h.c];
+  if (ch === '.') { grid[h.r][h.c] = ' '; score += 10; dotsLeft--; dotsEaten++; sfx.chomp(); }
+  else if (ch === 'o') {
+    grid[h.r][h.c] = ' '; score += 50; dotsLeft--; dotsEaten++;
+    powerT = Math.max(3, 8 - level); wolfChain = 0;
+    for (const w of wolves) if (w.mode === 'chase') { w.scared = true; if (w.dir) { w.dir = [-w.dir[0], -w.dir[1]]; w.p = 1 - w.p; w.c = wrapC(w.c - w.dir[0]); w.r -= w.dir[1]; } }
+    sfx.power();
+  } else return;
+  if (dotsEaten === 60 || dotsEaten === 140) bonus = { t: 9, pts: 300 * level };
+  if (dotsLeft === 0) { setState('clear'); sfx.clear(); }
+}
+
+/* ---------- Logik ---------- */
+function popup(x, y, s, color) { popups.push({ x, y, s, color, t: 0 }); }
+
+function update(dt) {
+  blink += dt; stateT += dt;
+  for (const p of popups || []) p.t += dt;
+  if (popups) popups = popups.filter(p => p.t < 1.2);
+
+  if (state === 'attract') { if (startPressed) newGame(); startPressed = false; return; }
+  if (state === 'over') {
+    if (startPressed && stateT > 1.5) newGame();
+    else if (stateT > 12) setState('attract');
+    startPressed = false; return;
+  }
+  startPressed = startPressed && paused;
+  if (paused) { if (startPressed) paused = false; startPressed = false; return; }
+
+  if (state === 'ready') { if (stateT > 2) setState('play'); return; }
+  if (state === 'dying') {
+    if (stateT > 1.8) {
+      if (lives <= 0) endGame();
+      else { resetPositions(); setState('ready'); }
+    }
+    return;
+  }
+  if (state === 'clear') {
+    if (stateT > 2.2) {
+      score += 500; timeLeft += 30; level++;
+      loadMaze(); resetPositions(); setState('ready');
+    }
+    return;
+  }
+
+  // --- play ---
+  roundT += dt;
+  timeLeft -= dt;
+  const sec = Math.ceil(timeLeft);
+  if (sec <= 10 && sec > 0 && sec !== lastTick) { lastTick = sec; sfx.tick(); }
+  if (timeLeft <= 0) { timeLeft = 0; endGame(); return; }
+
+  if (powerT > 0) {
+    powerT -= dt;
+    if (powerT <= 0) for (const w of wolves) w.scared = false;
+  }
+
+  // Hase: Umkehren geht sofort, sonst an der Kreuzung abbiegen
+  if (hare.dir && opposite(wantDir, hare.dir) && hare.p > 0) {
+    hare.c = wrapC(hare.c + hare.dir[0]); hare.r += hare.dir[1];
+    hare.p = 1 - hare.p; hare.dir = wantDir;
+    if (hare.dir[0]) hare.face = hare.dir[0];
+  }
+  if (!hare.dir) decideHare(hare);
+  const hareSpeed = Math.min(8, 6.2 + level * 0.25);
+  move(hare, hareSpeed * dt, decideHare, eatTile);
+  if (state !== 'play') return;
+  if (hare.dir) hare.anim += dt;
+
+  // Wölfe
+  const base = Math.min(7.2, 5.2 + (level - 1) * 0.45);
+  for (const w of wolves) {
+    if (w.mode === 'den') {
+      if (roundT >= w.release) { w.mode = 'exit'; w.scared = false; }
+      else continue;
+    }
+    const tunnel = w.r === 9 && (w.c < 5 || w.c > 19);
+    const sp = w.mode === 'eaten' ? 12 : w.scared ? 3.4 : tunnel ? base * 0.6 : base;
+    move(w, sp * dt, decideWolf, wolfArrived);
+    w.anim += dt;
+  }
+
+  // Bonus-Möhre
+  if (bonus) {
+    bonus.t -= dt;
+    if (bonus.t <= 0) bonus = null;
+    else if (hare.c === BONUS_TILE.c && hare.r === BONUS_TILE.r && hare.p < 0.5) {
+      score += bonus.pts; sfx.bonus();
+      popup(OX + BONUS_TILE.c * T + 5, OY + BONUS_TILE.r * T - 4, String(bonus.pts), PAL.O);
+      bonus = null;
+    }
+  }
+
+  // Zusammenstöße
+  const hp = pos(hare);
+  for (const w of wolves) {
+    if (w.mode === 'den' || w.mode === 'eaten') continue;
+    const wp = pos(w);
+    let dx = Math.abs(wp.x - hp.x); dx = Math.min(dx, COLS - dx);
+    if (dx < 0.6 && Math.abs(wp.y - hp.y) < 0.6) {
+      if (w.scared) {
+        const pts = 200 * Math.pow(2, wolfChain++);
+        score += pts; sfx.eatWolf();
+        popup(OX + wp.x * T + 5, OY + wp.y * T - 4, String(pts), PAL.C);
+        w.scared = false; w.mode = 'eaten';
+      } else {
+        lives--; setState('dying'); sfx.death();
+        return;
+      }
+    }
+  }
+}
+
+function endGame() {
+  if (score > record) { record = score; newRecord = true; saveRecord(); }
+  setState('over'); sfx.over();
+}
+
+/* ---------- Zeichnen ---------- */
+function drawMaze() {
+  const flash = state === 'clear' && Math.floor(stateT * 6) % 2;
+  ctx.drawImage(flash ? MAZE_FLASH : MAZE_IMG, OX, OY);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = grid[r][c], x = OX + c * T, y = OY + r * T;
+    if (ch === '.') { ctx.fillStyle = PAL.O; ctx.fillRect(x + 4, y + 4, 2, 3); ctx.fillStyle = PAL.g; ctx.fillRect(x + 4, y + 3, 2, 1); }
+    else if (ch === 'o' && (state !== 'play' || blink % 0.4 < 0.28)) ctx.drawImage(CABBAGE, x + 1, y + 1);
+  }
+}
+
+function drawEntity(sprPair, e) {
+  const p = pos(e);
+  const x = Math.round(OX + p.x * T), y = Math.round(OY + p.y * T);
+  ctx.drawImage(e.face > 0 ? sprPair.r : sprPair.l, x, y);
+}
+
+function drawWolves() {
+  for (const w of wolves) {
+    const f = Math.floor(w.anim * 8) % 2;
+    if (w.mode === 'eaten') {
+      const p = pos(w), x = Math.round(OX + p.x * T), y = Math.round(OY + p.y * T);
+      ctx.fillStyle = '#fff'; ctx.fillRect(x + 2, y + 3, 2, 2); ctx.fillRect(x + 6, y + 3, 2, 2);
+      ctx.fillStyle = PAL.C; ctx.fillRect(x + 3 + (w.face > 0 ? 1 : 0) - 1, y + 4, 1, 1); ctx.fillRect(x + 7 + (w.face > 0 ? 1 : 0) - 1, y + 4, 1, 1);
+      continue;
+    }
+    let spr = WOLF_SPR[w.i][f];
+    if (w.scared) spr = powerT < 2 && blink % 0.3 < 0.15 ? FLASH_SPR[f] : SCARED_SPR[f];
+    drawEntity(spr, w);
+  }
+}
+
+function drawHare() {
+  if (state === 'dying') {
+    // Hase dreht sich und verschwindet
+    const k = Math.min(1, stateT / 1.4);
+    const p = pos(hare), x = OX + p.x * T + 5, y = OY + p.y * T + 5;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(k * Math.PI * 4); ctx.scale(1 - k, 1 - k);
+    ctx.drawImage(HARE[0].r, -5, -5); ctx.restore();
+    return;
+  }
+  drawEntity(HARE[Math.floor(hare.anim * 10) % 2], hare);
+}
+
+function drawHUD() {
+  txt('PUNKTE', 4, 2, PAL.C); txt(pad(score), 56, 2, '#fff');
+  const t = Math.ceil(timeLeft);
+  txt('ZEIT', 132, 2, PAL.C);
+  txt(String(t).padStart(3, '0'), 168, 2, t <= 10 && blink % 0.5 < 0.25 ? PAL.R : '#fff');
+  txt('REKORD', 212, 2, PAL.C); txt(pad(record), 276, 2, PAL.Y);
+  // unten: Leben und Runde
+  for (let i = 0; i < Math.max(0, lives - (state === 'ready' || state === 'play' ? 1 : 0)); i++) ctx.drawImage(HARE[0].r, 4 + i * 14, 228);
+  txt('RUNDE ' + level, W - 4, 230, PAL.Y, 8, 'right');
+}
+
+function render() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+
+  if (state === 'attract') { drawAttract(); return; }
+
+  drawMaze();
+  if (bonus && state === 'play' && (bonus.t > 2 || blink % 0.3 < 0.2)) ctx.drawImage(CARROT, OX + BONUS_TILE.c * T + 1, OY + BONUS_TILE.r * T + 1);
+  if (state !== 'clear') { if (state !== 'dying' || stateT < 0.5) drawWolves(); }
+  if (state !== 'clear' || Math.floor(stateT * 6) % 2 === 0) drawHare();
+
+  // Tunnelränder abdecken
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, OY, OX, ROWS * T); ctx.fillRect(OX + COLS * T, OY, W - OX - COLS * T, ROWS * T);
+
+  for (const p of popups) txt(p.s, p.x, p.y - p.t * 10, p.color, 8, 'center');
+  drawHUD();
+
+  if (state === 'ready') txt('BEREIT!', OX + 12.5 * T, OY + 11 * T + 1, PAL.Y, 8, 'center');
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 90, W, 50);
+    txt('PAUSE', W / 2, 100, PAL.Y, 16, 'center');
+    txt('LEERTASTE = WEITER', W / 2, 124, '#fff', 8, 'center');
+  }
+  if (state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, 14, W, 212);
+    txt('SPIELENDE', W / 2, 50, PAL.R, 16, 'center');
+    txt('PUNKTE ' + pad(score), W / 2, 90, '#fff', 8, 'center');
+    txt('RUNDE  ' + pad(level, 5), W / 2, 108, '#fff', 8, 'center');
+    if (timeLeft <= 0) txt('DIE ZEIT IST UM', W / 2, 130, PAL.O, 8, 'center');
+    if (newRecord && blink % 0.6 < 0.4) txt('NEUER REKORD!', W / 2, 152, PAL.Y, 8, 'center');
+    if (stateT > 1.5 && blink % 1 < 0.6) txt('LEERTASTE = NEUES SPIEL', W / 2, 186, PAL.C, 8, 'center');
+  }
+}
+
+function drawAttract() {
+  txt('PUNKTE', 4, 2, PAL.C); txt(pad(0), 56, 2, '#fff');
+  txt('REKORD', 212, 2, PAL.C); txt(pad(record), 276, 2, PAL.Y);
+  txt('HASE UND WOLF', W / 2, 26, PAL.Y, 16, 'center');
+
+  // kleine Jagdszene
+  const run = (blink * 60) % (W + 120) - 60;
+  const f = Math.floor(blink * 8) % 2;
+  ctx.drawImage(HARE[f].r, Math.round(run), 52);
+  WOLF_SPR.forEach((s, i) => ctx.drawImage(s[f].r, Math.round(run - 30 - i * 16), 52));
+
+  const rows = [
+    [() => { ctx.fillStyle = PAL.O; ctx.fillRect(113, 86, 2, 3); ctx.fillStyle = PAL.g; ctx.fillRect(113, 85, 2, 1); }, 'MOEHRE', '10'],
+    [() => ctx.drawImage(CABBAGE, 110, 102), 'KOHLKOPF', '50'],
+    [() => ctx.drawImage(SCARED_SPR[0].r, 109, 121), 'WOLF VERJAGT', '200-1600'],
+    [() => ctx.drawImage(CARROT, 110, 140), 'RIESENMOEHRE', '300+']
+  ];
+  rows.forEach(([icon, name, pts], i) => {
+    icon();
+    txt(name, 130, 84 + i * 19, '#fff');
+    txt(pts, 130 + 13 * 8 + 4, 84 + i * 19, PAL.Y);
+  });
+  txt('RUNDE GESCHAFFT: +500 UND +30 SEK', W / 2, 172, PAL.g, 8, 'center');
+  txt('3 HASEN  -  120 SEKUNDEN', W / 2, 188, PAL.C, 8, 'center');
+  if (blink % 1 < 0.6) txt('LEERTASTE = MUENZE EINWERFEN', W / 2, 210, PAL.Y, 8, 'center');
+}
+
+/* ---------- Skalierung ---------- */
+const wrap = document.getElementById('wrap');
+function fit() {
+  const avW = wrap.clientWidth;
+  const avH = window.innerHeight - 200;
+  let s = Math.min(avW / W, Math.max(avH, 240) / H);
+  if (s >= 1) s = Math.floor(s);
+  cv.style.width = Math.floor(W * s) + 'px';
+  cv.style.height = Math.floor(H * s) + 'px';
+}
+addEventListener('resize', fit);
+fit();
+
+/* ---------- Hauptschleife ---------- */
+loadMaze(); resetPositions();
+score = 0; lives = LIVES; level = 1; timeLeft = GAME_TIME; popups = [];
+let last = performance.now();
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+  last = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+const fontReady = document.fonts ? document.fonts.load('8px "Press Start 2P"').catch(() => {}) : Promise.resolve();
+Promise.race([fontReady, new Promise(r => setTimeout(r, 1500))]).then(() => requestAnimationFrame(frame));
+})();
+</script>
+</body>
+</html>

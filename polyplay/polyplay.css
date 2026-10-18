@@ -1,0 +1,209 @@
+:root {
+  --bg: #1a1410;
+  --wood: #7a4a24;
+  --wood-dark: #4a2a12;
+  --orange: #ff8a00;
+  --cream: #f4e6c8;
+  --text: #f4e6c8;
+  --muted: #b8a585;
+  --screen: #000;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; }
+
+body {
+  background: var(--bg) radial-gradient(ellipse at top, #3a2a1c 0%, var(--bg) 70%);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.cabinet {
+  width: 100%;
+  max-width: 1000px;
+  background: linear-gradient(180deg, var(--wood) 0%, var(--wood-dark) 100%);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.6), inset 0 0 0 3px rgba(255,255,255,.06);
+}
+
+.marquee {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--orange);
+  color: #1a0d00;
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+}
+
+.logo {
+  font-family: "Press Start 2P", monospace;
+  font-size: clamp(16px, 4vw, 26px);
+  color: #1a0d00;
+  text-decoration: none;
+  letter-spacing: 1px;
+}
+.logo span { color: #fff; }
+
+.game-name {
+  font-family: "Press Start 2P", monospace;
+  font-size: clamp(10px, 2.4vw, 14px);
+  text-transform: uppercase;
+}
+
+.screen-wrap {
+  position: relative;
+  background: #111;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+  box-shadow: inset 0 0 20px #000;
+}
+
+canvas {
+  display: block;
+  background: var(--screen);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border-radius: 6px;
+  max-width: 100%;
+  touch-action: none;
+}
+
+/* Scanlines */
+.screen-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+  border-radius: 6px;
+}
+
+.touch {
+  display: none;
+  gap: 10px;
+  margin-top: 14px;
+}
+.touch button {
+  flex: 1;
+  font-family: "Press Start 2P", monospace;
+  font-size: 18px;
+  padding: 20px 0;
+  border: none;
+  border-radius: 10px;
+  background: #2a2a2a;
+  color: var(--cream);
+  box-shadow: 0 4px 0 #000;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.touch button.fire { background: #c01818; flex: 1.4; font-size: 14px; }
+.touch button.on { transform: translateY(3px); box-shadow: 0 1px 0 #000; }
+
+@media (pointer: coarse) {
+  .touch { display: flex; }
+}
+
+.help {
+  margin-top: 14px;
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.7;
+}
+.help p { margin: 4px 0; }
+.help a { color: var(--orange); }
+
+kbd {
+  display: inline-block;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #2a1a0c;
+  border: 1px solid #5a3a1c;
+  color: var(--cream);
+}
+
+/* Spielauswahl */
+.menu {
+  background: #000;
+  border-radius: 10px;
+  padding: 24px 16px;
+  font-family: "Press Start 2P", monospace;
+}
+.menu h1 {
+  font-size: clamp(12px, 3vw, 18px);
+  color: #00e0ff;
+  text-align: center;
+  margin: 0 0 24px;
+  font-weight: normal;
+}
+.menu ol {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 520px;
+  counter-reset: g;
+}
+.menu li {
+  counter-increment: g;
+  margin: 0 0 6px;
+}
+.menu li a, .menu li span {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 12px;
+  font-size: clamp(10px, 2.6vw, 14px);
+  text-decoration: none;
+  border-radius: 4px;
+}
+.menu li a::before, .menu li span::before {
+  content: counter(g) ".";
+  color: #ff8a00;
+  min-width: 2em;
+}
+.menu li a { color: #ffe000; }
+.menu li a:hover, .menu li a:focus-visible { background: #222; outline: none; }
+.menu li span { color: #555; }
+.menu li span small { margin-left: auto; font-size: 8px; color: #555; }
+.menu .note {
+  font-family: system-ui, sans-serif;
+  color: #888;
+  font-size: 13px;
+  text-align: center;
+  margin: 24px 0 0;
+  line-height: 1.6;
+}
+
+/* Steuerkreuz (Hase und Wolf) */
+.touch.dpad {
+  display: none;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas: ". up ." "left mid right" ". down .";
+  max-width: 320px;
+  margin: 14px auto 0;
+}
+.dpad .up { grid-area: up; }
+.dpad .left { grid-area: left; }
+.dpad .mid { grid-area: mid; font-size: 10px; background: #c01818; }
+.dpad .right { grid-area: right; }
+.dpad .down { grid-area: down; }
+@media (pointer: coarse) {
+  .touch.dpad { display: grid; }
+}
+.touch.dpad button { font-size: 14px; }
+.touch.dpad .mid { font-size: 10px; }

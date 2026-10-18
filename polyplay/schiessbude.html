@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Schießbude – Polyplay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="polyplay.css">
+</head>
+<body>
+<main class="cabinet">
+  <header class="marquee">
+    <a class="logo" href="index.html" title="Zur Spielauswahl">poly<span>·</span>play</a>
+    <span class="game-name">Schießbude</span>
+  </header>
+
+  <div class="screen-wrap" id="wrap">
+    <canvas id="screen" width="320" height="240" aria-label="Spielfeld Schießbude"></canvas>
+  </div>
+
+  <div class="touch" id="touch" aria-hidden="true">
+    <button data-k="left">◀</button>
+    <button data-k="fire" class="fire">FEUER</button>
+    <button data-k="right">▶</button>
+  </div>
+
+  <footer class="help">
+    <p><kbd>←</kbd> <kbd>→</kbd> Gewehr bewegen &nbsp;·&nbsp; <kbd>Leertaste</kbd> Schießen / Start &nbsp;·&nbsp; <kbd>P</kbd> Pause &nbsp;·&nbsp; <kbd>M</kbd> Ton aus/an</p>
+    <p><a href="index.html">← Zur Spielauswahl</a></p>
+  </footer>
+</main>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- Grundlagen ---------- */
+const W = 320, H = 240, PX = 2;            // logische Auflösung, Sprite-Pixelgröße
+const GAME_TIME = 90;                      // Polyplay: 90 Sekunden pro Münze
+const cv = document.getElementById('screen');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const PAL = {
+  Y:'#ffe000', O:'#ff8a00', K:'#000000', W:'#ffffff', P:'#ff70b0', R:'#ff3030',
+  G:'#30e030', B:'#a05020', L:'#f0c080', C:'#00e0ff', M:'#e040ff', N:'#909090'
+};
+
+function makeSprite(rows, solid) {
+  const h = rows.length, w = rows[0].length;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  rows.forEach((r, j) => [...r].forEach((ch, i) => {
+    if (ch === '.') return;
+    x.fillStyle = solid || PAL[ch];
+    x.fillRect(i, j, 1, 1);
+  }));
+  return c;
+}
+function mirror(src) {
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const x = c.getContext('2d');
+  x.translate(src.width, 0); x.scale(-1, 1); x.drawImage(src, 0, 0);
+  return c;
+}
+function sprite(rows) {
+  const r = makeSprite(rows), f = makeSprite(rows, '#ffffff');
+  return { r, l: mirror(r), fr: f, fl: mirror(f), w: r.width * PX, h: r.height * PX };
+}
+
+const SPR = {
+  pipe: sprite([
+    '.WWWW.',
+    'WWWWWW',
+    'WWWWWW',
+    '.WWWW.',
+    '..WN..',
+    '..WN..',
+    '..WN..',
+    '..WN..',
+    '..WN..',
+    '.WWWW.'
+  ]),
+  owl: sprite([
+    '.O......O.',
+    '.OOOOOOOO.',
+    'OWWOOOOWWO',
+    'OWKOOOOKWO',
+    'OWWOYYOWWO',
+    '.OOOYYOOO.',
+    '.OOLLLLOO.',
+    '.OLLLLLLO.',
+    '.OOLLLLOO.',
+    '..Y....Y..'
+  ]),
+  rabbit: sprite([
+    '..W...W...',
+    '..WP..WP..',
+    '..WP..WP..',
+    '..WW..WW..',
+    '...WWWW...',
+    '..WWKWKW..',
+    '..WWWWWW..',
+    '...WPPW...',
+    '..WWWWWW..',
+    '.WWWWWWWW.',
+    '.WWWWWWWW.',
+    '..WW..WW..'
+  ]),
+  duck: sprite([
+    '......YYY...',
+    '.....YYKYY..',
+    '.....YYYYOO.',
+    '..Y..YYYY...',
+    '.YYYYYYYYY..',
+    'YYYOOOOYYY..',
+    '.YYYYYYYYY..',
+    '..YYYYYYY...'
+  ]),
+  bird1: sprite([
+    'M........M',
+    '.M......M.',
+    '..MMMMMMOO',
+    '...MMMM...',
+    '..........'
+  ]),
+  bird2: sprite([
+    '..........',
+    '..MMMMMM..',
+    '.MMMMMMMOO',
+    'M..MMMM..M',
+    '..........'
+  ]),
+  gun: sprite([
+    '.....GG.....',
+    '.....GG.....',
+    '.....GG.....',
+    '....GGGG....',
+    '..GGGGGGGG..',
+    'GGGGGGGGGGGG',
+    'GNNGGGGGGNNG'
+  ])
+};
+
+/* ---------- Ton ---------- */
+let ac = null, muted = false;
+function audioOn() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
+  if (ac && ac.state === 'suspended') ac.resume();
+}
+function tone(f1, f2, dur, type = 'square', vol = 0.12, delay = 0) {
+  if (!ac || muted) return;
+  const t = ac.currentTime + delay;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f2, 1), t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(ac.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, vol = 0.15) {
+  if (!ac || muted) return;
+  const n = Math.floor(ac.sampleRate * dur);
+  const buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = ac.createBufferSource(), g = ac.createGain();
+  s.buffer = buf; g.gain.value = vol;
+  s.connect(g).connect(ac.destination); s.start();
+}
+const sfx = {
+  shot: () => { tone(900, 120, 0.12, 'square', 0.08); noise(0.05, 0.08); },
+  hit:  () => { tone(1400, 300, 0.15, 'square', 0.1); noise(0.08, 0.1); },
+  bird: () => { [880, 1175, 1568, 2093].forEach((f, i) => tone(f, f, 0.08, 'square', 0.09, i * 0.07)); },
+  row:  () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.1, 'triangle', 0.15, i * 0.09)); },
+  tick: () => tone(1800, 1800, 0.03, 'square', 0.05),
+  coin: () => { tone(988, 988, 0.08, 'square', 0.1); tone(1319, 1319, 0.3, 'square', 0.1, 0.08); },
+  over: () => { [784, 659, 523, 392, 262].forEach((f, i) => tone(f, f * 0.98, 0.18, 'triangle', 0.15, i * 0.17)); }
+};
+
+/* ---------- Text ---------- */
+function txt(s, x, y, color = '#fff', size = 8, align = 'left') {
+  ctx.font = `${size}px "Press Start 2P", monospace`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = align;
+  ctx.fillStyle = color;
+  ctx.fillText(s, Math.round(x), Math.round(y));
+}
+const pad = (n, l = 5) => String(n).padStart(l, '0');
+
+/* ---------- Rekord ---------- */
+const REC_KEY = 'polyplay-schiessbude-rekord';
+let record = 0;
+try { record = parseInt(localStorage.getItem(REC_KEY), 10) || 0; } catch (e) { /* ohne Speicher */ }
+function saveRecord() { try { localStorage.setItem(REC_KEY, String(record)); } catch (e) { /* egal */ } }
+
+/* ---------- Spielfeld ---------- */
+const ROW_DEFS = [
+  { spr: SPR.pipe,   y: 40,  pts: 40, speed: 62, dir:  1, n: 9 },
+  { spr: SPR.owl,    y: 70,  pts: 30, speed: 42, dir: -1, n: 7 },
+  { spr: SPR.rabbit, y: 102, pts: 20, speed: 32, dir:  1, n: 6 },
+  { spr: SPR.duck,   y: 138, pts: 10, speed: 24, dir: -1, n: 6 }
+];
+const LOOP = W + 48;          // Umlauflänge des Laufbands
+const GUN_Y = 206, GROUND_Y = 222, BIRD_Y = 16;
+
+let state = 'attract';        // attract | play | over
+let rows, gun, bullet, bird, popups, score, timeLeft, shots, hits, cleared;
+let birdTimer, stateTimer = 0, paused = false, lastTick = 0, newRecord = false, blink = 0;
+
+function makeRows() {
+  return ROW_DEFS.map(d => ({
+    ...d,
+    offset: Math.random() * LOOP,
+    spacing: LOOP / d.n,
+    targets: Array.from({ length: d.n }, () => ({ alive: true, hitT: 0 })),
+    refill: 0
+  }));
+}
+function resetGame() {
+  rows = makeRows();
+  gun = { x: W / 2 - SPR.gun.w / 2 };
+  bullet = null; bird = null; popups = [];
+  score = 0; timeLeft = GAME_TIME; shots = 0; hits = 0; cleared = 0;
+  birdTimer = 6 + Math.random() * 6;
+  newRecord = false; lastTick = 0;
+}
+resetGame();
+
+function targetX(row, i) {
+  const p = ((row.offset + i * row.spacing) % LOOP + LOOP) % LOOP;
+  return p - 24;
+}
+
+/* ---------- Eingabe ---------- */
+const keys = { left: false, right: false, fire: false };
+let firePressed = false;
+const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'fire', ArrowUp: 'fire', KeyW: 'fire', Enter: 'fire' };
+
+addEventListener('keydown', e => {
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); if (k === 'fire' && !keys.fire) firePressed = true; keys[k] = true; audioOn(); }
+  if (e.code === 'KeyP' && state === 'play') paused = !paused;
+  if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+addEventListener('blur', () => { keys.left = keys.right = keys.fire = false; if (state === 'play') paused = true; });
+
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  const down = e => { e.preventDefault(); audioOn(); if (k === 'fire' && !keys.fire) firePressed = true; keys[k] = true; b.classList.add('on'); };
+  const up = e => { e.preventDefault(); keys[k] = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', down);
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointerleave', up);
+  b.addEventListener('pointercancel', up);
+});
+cv.addEventListener('pointerdown', () => { audioOn(); if (state !== 'play' || paused) firePressed = true; });
+
+/* ---------- Logik ---------- */
+function popup(x, y, s, color) { popups.push({ x, y, s, color, t: 0 }); }
+
+function startGame() {
+  resetGame();
+  state = 'play'; paused = false;
+  sfx.coin();
+}
+function endGame() {
+  state = 'over'; stateTimer = 0;
+  bullet = null;
+  if (score > record) { record = score; newRecord = true; saveRecord(); }
+  sfx.over();
+}
+
+function updateRows(dt, speedFactor = 1) {
+  for (const row of rows) {
+    row.offset += row.dir * row.speed * speedFactor * dt;
+    for (const t of row.targets) if (t.hitT > 0) t.hitT -= dt;
+    if (row.refill > 0) {
+      row.refill -= dt;
+      if (row.refill <= 0) row.targets.forEach(t => { t.alive = true; t.hitT = 0; });
+    }
+  }
+}
+
+function update(dt) {
+  blink += dt;
+  if (state === 'attract') { updateRows(dt, 0.7); if (firePressed) startGame(); firePressed = false; return; }
+  if (state === 'over') {
+    stateTimer += dt;
+    updateRows(dt, 0.4);
+    if (firePressed && stateTimer > 1.5) startGame();
+    else if (stateTimer > 10) { state = 'attract'; rows = makeRows(); }
+    firePressed = false;
+    return;
+  }
+  if (paused) { if (firePressed) paused = false; firePressed = false; return; }
+
+  // Zeit
+  timeLeft -= dt;
+  const sec = Math.ceil(timeLeft);
+  if (sec <= 10 && sec !== lastTick && sec > 0) { lastTick = sec; sfx.tick(); }
+  if (timeLeft <= 0) { timeLeft = 0; endGame(); return; }
+
+  // Gewehr
+  const v = 150;
+  if (keys.left) gun.x -= v * dt;
+  if (keys.right) gun.x += v * dt;
+  gun.x = Math.max(2, Math.min(W - SPR.gun.w - 2, gun.x));
+
+  if ((firePressed || keys.fire) && !bullet) {
+    bullet = { x: gun.x + SPR.gun.w / 2 - 1, y: GUN_Y - 4 };
+    shots++; sfx.shot();
+  }
+  firePressed = false;
+
+  updateRows(dt);
+
+  // Vogel
+  if (!bird) {
+    birdTimer -= dt;
+    if (birdTimer <= 0) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      bird = { x: dir > 0 ? -24 : W + 4, dir, speed: 80 + Math.random() * 40, t: 0,
+               pts: [100, 200, 300][Math.floor(Math.random() * 3)] };
+    }
+  } else {
+    bird.x += bird.dir * bird.speed * dt; bird.t += dt;
+    if (bird.x < -30 || bird.x > W + 30) { bird = null; birdTimer = 8 + Math.random() * 8; }
+  }
+
+  // Kugel
+  if (bullet) {
+    bullet.y -= 340 * dt;
+    if (bullet.y < 12) bullet = null;
+    else checkHits();
+  }
+
+  for (const p of popups) p.t += dt;
+  popups = popups.filter(p => p.t < 0.9);
+}
+
+function checkHits() {
+  const bx = bullet.x, by = bullet.y, bw = 2, bh = 5;
+  const overlap = (x, y, w, h) => bx < x + w && bx + bw > x && by < y + h && by + bh > y;
+
+  for (let r = rows.length - 1; r >= 0; r--) {      // von unten nach oben
+    const row = rows[r], s = row.spr;
+    if (row.refill > 0) continue;
+    for (let i = 0; i < row.targets.length; i++) {
+      const t = row.targets[i];
+      if (!t.alive) continue;
+      const x = targetX(row, i);
+      if (x < -s.w / 2 || x > W - s.w / 2) continue;
+      if (overlap(x, row.y, s.w, s.h)) {
+        t.alive = false; t.hitT = 0.3;
+        score += row.pts; hits++;
+        popup(x + s.w / 2, row.y - 4, String(row.pts), '#fff');
+        sfx.hit();
+        bullet = null;
+        if (row.targets.every(q => !q.alive)) {
+          cleared++;
+          score += 100; timeLeft += 5;
+          row.refill = 0.8; row.speed *= 1.15;
+          popup(W / 2, row.y + 4, 'REIHE FREI! +100 +5s', PAL.Y);
+          sfx.row();
+        }
+        return;
+      }
+    }
+  }
+  if (bird) {
+    const s = SPR.bird1;
+    if (overlap(bird.x, BIRD_Y, s.w, s.h)) {
+      score += bird.pts; hits++;
+      popup(bird.x + s.w / 2, BIRD_Y, String(bird.pts), PAL.M);
+      sfx.bird();
+      bird = null; bullet = null; birdTimer = 8 + Math.random() * 8;
+    }
+  }
+}
+
+/* ---------- Zeichnen ---------- */
+function drawRows(dim) {
+  for (const row of rows) {
+    const s = row.spr;
+    // Regalbrett
+    const py = row.y + s.h + 2;
+    ctx.fillStyle = '#6a3410'; ctx.fillRect(0, py, W, 4);
+    ctx.fillStyle = '#c06a28'; ctx.fillRect(0, py, W, 1);
+    if (row.refill > 0) continue;
+    for (let i = 0; i < row.targets.length; i++) {
+      const t = row.targets[i], x = Math.round(targetX(row, i));
+      if (x < -s.w || x > W) continue;
+      const img = row.dir > 0 ? s.r : s.l;
+      if (t.alive) {
+        ctx.drawImage(img, x, row.y, s.w, s.h);
+      } else if (t.hitT > 0) {         // umkippen
+        const k = t.hitT / 0.3, hh = Math.max(2, Math.round(s.h * k));
+        ctx.drawImage(row.dir > 0 ? s.fr : s.fl, x, row.y + s.h - hh, s.w, hh);
+      }
+    }
+  }
+  if (dim) { ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 12, W, GROUND_Y - 12); }
+}
+
+function drawHUD() {
+  txt('PUNKTE', 4, 2, PAL.C); txt(pad(score), 56, 2, '#fff');
+  const t = Math.ceil(timeLeft);
+  txt('ZEIT', 134, 2, PAL.C);
+  txt(String(t).padStart(2, '0'), 170, 2, t <= 10 && blink % 0.5 < 0.25 ? PAL.R : '#fff');
+  txt('REKORD', 212, 2, PAL.C); txt(pad(record), 276, 2, PAL.Y);
+}
+
+function drawGround() {
+  ctx.fillStyle = '#204020'; ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.fillStyle = PAL.G; ctx.fillRect(0, GROUND_Y, W, 1);
+}
+
+function render() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+
+  // Zeltdach-Bordüre
+  for (let x = 0; x < W; x += 16) {
+    ctx.fillStyle = (x / 16) % 2 ? PAL.R : '#fff';
+    ctx.fillRect(x, 12, 16, 2);
+  }
+
+  drawRows(state !== 'play');
+  drawGround();
+
+  if (state === 'play') {
+    if (bird) {
+      const s = Math.floor(bird.t * 8) % 2 ? SPR.bird2 : SPR.bird1;
+      ctx.drawImage(bird.dir > 0 ? s.r : s.l, Math.round(bird.x), BIRD_Y, s.w, s.h);
+    }
+    if (bullet) {
+      ctx.fillStyle = PAL.Y; ctx.fillRect(Math.round(bullet.x), Math.round(bullet.y), 2, 5);
+    }
+    ctx.drawImage(SPR.gun.r, Math.round(gun.x), GUN_Y, SPR.gun.w, SPR.gun.h);
+    for (const p of popups) txt(p.s, p.x, p.y - p.t * 16, p.color, 8, 'center');
+    drawHUD();
+    if (paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 90, W, 50);
+      txt('PAUSE', W / 2, 100, PAL.Y, 16, 'center');
+      txt('LEERTASTE = WEITER', W / 2, 124, '#fff', 8, 'center');
+    }
+    return;
+  }
+
+  drawHUD();
+
+  if (state === 'attract') {
+    txt('SCHIESSBUDE', W / 2, 30, PAL.Y, 16, 'center');
+    txt('PUNKTTABELLE', W / 2, 60, PAL.C, 8, 'center');
+    const table = [[SPR.pipe, 40], [SPR.owl, 30], [SPR.rabbit, 20], [SPR.duck, 10], [SPR.bird1, '100-300']];
+    table.forEach(([s, p], i) => {
+      const y = 72 + i * 23;
+      ctx.drawImage(s.r, 118 - s.w / 2, y + 8 - s.h / 2, s.w, s.h);
+      txt('= ' + p, 140, y + 4, '#fff');
+    });
+    txt('REIHE ABGERAEUMT: +100 UND +5 SEK', W / 2, 188, PAL.G, 8, 'center');
+    if (blink % 1 < 0.6) txt('LEERTASTE = MUENZE EINWERFEN', W / 2, 204, PAL.Y, 8, 'center');
+  } else if (state === 'over') {
+    txt('SPIELENDE', W / 2, 46, PAL.R, 16, 'center');
+    txt('PUNKTE   ' + pad(score), W / 2, 84, '#fff', 8, 'center');
+    txt('SCHUESSE ' + pad(shots, 5), W / 2, 102, '#fff', 8, 'center');
+    txt('TREFFER  ' + pad(hits, 5), W / 2, 120, '#fff', 8, 'center');
+    const q = shots ? Math.round(hits / shots * 100) : 0;
+    txt('QUOTE    ' + String(q).padStart(4, ' ') + '%', W / 2, 138, '#fff', 8, 'center');
+    if (newRecord && blink % 0.6 < 0.4) txt('NEUER REKORD!', W / 2, 162, PAL.Y, 8, 'center');
+    if (stateTimer > 1.5 && blink % 1 < 0.6) txt('LEERTASTE = NEUES SPIEL', W / 2, 190, PAL.C, 8, 'center');
+  }
+}
+
+/* ---------- Skalierung ---------- */
+const wrap = document.getElementById('wrap');
+function fit() {
+  const avW = wrap.clientWidth;
+  const avH = window.innerHeight - 200;
+  let s = Math.min(avW / W, Math.max(avH, 240) / H);
+  if (s >= 1) s = Math.floor(s);
+  cv.style.width = Math.floor(W * s) + 'px';
+  cv.style.height = Math.floor(H * s) + 'px';
+}
+addEventListener('resize', fit);
+fit();
+
+/* ---------- Hauptschleife ---------- */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+  last = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+const fontReady = document.fonts ? document.fonts.load('8px "Press Start 2P"').catch(() => {}) : Promise.resolve();
+Promise.race([fontReady, new Promise(r => setTimeout(r, 1500))]).then(() => requestAnimationFrame(frame));
+})();
+</script>
+</body>
+</html>
